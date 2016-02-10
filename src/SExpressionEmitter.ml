@@ -679,6 +679,11 @@ and sexpr_of_decl (decl : decl) : sexpression =
     | EnumDecl _                  -> unsupported "EnumDecl"
     | Global _                    -> unsupported "Global"
     | UnloadableModuleDecl _      -> unsupported "UnloadableModuleDecl"
+    | TypedefDecl (_, te, str)    ->
+      build_list [ Symbol "typedef"
+                 ; Symbol str]
+                 [ "synonim-type", sexpr_of_type_expr te ]
+    | _ -> unsupported "WTF??"
 
 and sexpr_of_argument (type_, name) =
   Symbol (name ^ " with type " ^ (string_of_sexpression(sexpr_of_type_expr type_)))

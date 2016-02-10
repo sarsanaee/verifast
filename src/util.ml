@@ -333,6 +333,7 @@ let set_bindir dir =
 let rtdir _ = concat !bindir "rt"
 let cwd = Sys.getcwd()
 
+(* FIXME: here and below use Filename.dir_sep instead of "/" *)
 let compose base path = if Filename.is_relative path then base ^ "/" ^ path else path
 
 (** Reduces './foo' to 'foo', 'foo/.' to 'foo', 'foo//' to 'foo/', and 'foo/../bar' to 'bar'. *)

@@ -5,11 +5,33 @@ open Verifast0
 open Verifast
 open Arg
 
+let dump_context_to_file ctxts file =
+  let outfile = open_out_bin file in
+  let last_exec = List.find (function | Executing _ -> true | _ -> false) ctxts in
+  begin
+    match last_exec with
+    | (Executing (hp, env, _, str)) ->
+      begin
+        List.iter (fun (var,value) ->
+            output_string outfile ("(" ^ var ^ " = " ^ value ^ ")\n")) env;
+        List.iter (function Chunk ((g, literal), targs, coef, ts, size) ->
+            (* print_endline (string_of_chunk (Chunk ((g, literal), targs, coef, ts, size))); *)
+            if (g = "integer") then
+              output_string outfile ("(" ^ (List.nth ts 0) ^ " = " ^ (List.nth ts 1) ^ ")\n")
+          ) hp
+      end
+    | _ -> failwith " no exec "
+  end ;
+  List.iter (function
+      | Assuming tn -> output_string outfile ("(" ^ tn ^ ")\n")
+      | _ -> ()) ctxts
+
 let _ =
   let print_msg l msg =
     print_endline (string_of_loc l ^ ": " ^ msg)
   in
-  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string) (path : string) (emitHighlightedSourceFiles : bool) =
+  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string option) (path : string)
+      (breakpoint_lino : int option) (breakpoint_ctxt_fname : string option) (emitHighlightedSourceFiles : bool) =
     let verify range_callback =
     let exit l =
       Java_frontend_bridge.unload();
@@ -17,7 +39,7 @@ let _ =
     in
     try
       let use_site_callback declKind declLoc useSiteLoc = () in
-      let my_breakpoint = None in
+      let my_breakpoint = match breakpoint_lino with |Some lino -> Some (path,lino) | None -> None in
       let stats = verify_program ~emitter_callback:emitter_callback prover options path range_callback use_site_callback (fun _ -> ()) my_breakpoint None in
       if print_stats then stats#printStats;
       print_endline ("0 errors found (" ^ (string_of_int (stats#getStmtExec)) ^ " statements verified)");
@@ -34,8 +56,13 @@ let _ =
         let _ = print_endline ("Heap: " ^ string_of_heap h) in
         let _ = print_endline ("Env: " ^ string_of_env env) in
         *)
-        let _ = print_msg l msg in
-        exit 1
+      begin
+        match breakpoint_ctxt_fname with
+        | Some fname -> dump_context_to_file ctxts fname
+        | None -> ()
+      end ;
+      let _ = print_msg l msg in
+      exit 1
     in
     if emitHighlightedSourceFiles then
     begin
@@ -160,6 +187,8 @@ let _ =
   let outputSExpressions : string option ref = ref None in
   let runtime: string option ref = ref None in
   let provides = ref [] in
+  let breakpoint_lino : int option ref = ref None in
+  let breakpoint_context_file : string option ref = ref None in
   let keepProvideFiles = ref false in
   let include_paths: string list ref = ref [] in
   let library_paths: string list ref = ref ["CRT"] in
@@ -205,6 +234,8 @@ let _ =
             ; "-emit_highlighted_source_files", Set emitHighlightedSourceFiles, " "
             ; "-provides", String (fun path -> provides := !provides @ [path]), " "
             ; "-keep_provide_files", Set keepProvideFiles, " "
+            ; "-breakpoint", Int (fun brp -> breakpoint_lino := Some brp), "Set the breakpoint line."
+            ; "-breakpoint_context_file", String (fun f -> breakpoint_context_file := Some f), "File to store the logical context of the breakpoint."
             ; "-emit_sexpr",
               String begin fun str ->
                 outputSExpressions := Some str;
@@ -260,7 +291,8 @@ let _ =
               SExpressionEmitter.emit target_file packages          
             | None             -> ()
         in
-        verify ~emitter_callback:emitter_callback !stats options !prover filename !emitHighlightedSourceFiles;
+        verify ~emitter_callback:emitter_callback !stats options !prover
+          filename !breakpoint_lino !breakpoint_context_file !emitHighlightedSourceFiles;
         allModules := ((Filename.chop_extension filename) ^ ".vfmanifest")::!allModules
       end
     else if Filename.check_suffix filename ".o" then

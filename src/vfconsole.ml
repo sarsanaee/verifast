@@ -17,7 +17,8 @@ let _ =
     in
     try
       let use_site_callback declKind declLoc useSiteLoc = () in
-      let stats = verify_program ~emitter_callback:emitter_callback prover options path range_callback use_site_callback (fun _ -> ()) None None in
+      let my_breakpoint = None in
+      let stats = verify_program ~emitter_callback:emitter_callback prover options path range_callback use_site_callback (fun _ -> ()) my_breakpoint None in
       if print_stats then stats#printStats;
       print_endline ("0 errors found (" ^ (string_of_int (stats#getStmtExec)) ^ " statements verified)");
       Java_frontend_bridge.unload();

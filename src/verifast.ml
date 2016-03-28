@@ -93,6 +93,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     in
     if !verbosity >= 1 then printff "%10.6fs: %s: Executing statement\n" (Perf.time ()) (string_of_loc l);
     check_breakpoint h env l;
+    check_exportpoint l;
     let check_expr (pn,ilist) tparams tenv e = check_expr_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e in
     let check_condition (pn,ilist) tparams tenv e = check_condition_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e in
     let check_expr_t (pn,ilist) tparams tenv e tp = check_expr_t_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e tp in
@@ -2002,7 +2003,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     end
   and verify_return_stmt (pn,ilist) blocks_done lblenv tparams boxes pure leminfo funcmap predinstmap sizemap tenv ghostenv h env explicit l eo epilog return_cont econt =
     with_context (Executing (h, env, l, "Executing return statement")) $. fun () ->
-    if explicit then check_breakpoint h env l;
+    if explicit then (check_breakpoint h env l; check_exportpoint l);
     if pure && not (List.mem "#result" ghostenv) then static_error l "Cannot return from a regular function in a pure context." None;
     begin fun cont ->
       match eo with
@@ -3056,6 +3057,7 @@ let verify_program_core (* ?verify_program_core *)
     (reportUseSite : decl_kind -> loc -> loc -> unit)
     (reportExecutionForest : node list ref -> unit)
     (breakpoint : (string * int) option)
+    (exportpoint : ((termnode' context list -> unit) * string * int) option)
     (targetPath : int list option) : unit =
 
   let module VP = VerifyProgram(struct
@@ -3070,6 +3072,7 @@ let verify_program_core (* ?verify_program_core *)
     let reportUseSite = reportUseSite
     let reportExecutionForest = reportExecutionForest
     let breakpoint = breakpoint
+    let exportpoint = exportpoint
     let targetPath = targetPath
   end) in
   ()
@@ -3078,7 +3081,17 @@ let verify_program_core (* ?verify_program_core *)
 
 class virtual prover_client =
   object
-    method virtual run: 'typenode 'symbol 'termnode. ('typenode, 'symbol, 'termnode) Proverapi.context -> Stats.stats
+    method virtual run:
+      'typenode 'symbol 'termnode.
+                          ('typenode, 'symbol, 'termnode) Proverapi.context ->
+      ('termnode -> string) -> Stats.stats
+  end
+
+class virtual ctxt_dumper =
+  object
+    method virtual run:
+      'termnode. 'termnode Verifast0.context list ->
+      ('termnode -> string) -> unit
   end
 
 let prover_table: (string * (string * (prover_client -> Stats.stats))) list ref = ref []
@@ -3117,13 +3130,20 @@ let verify_program (* ?verify_program *)
     (reportUseSite : decl_kind -> loc -> loc -> unit)
     (reportExecutionForest : node list ref -> unit)
     (breakpoint : (string * int) option)
+    (exportpoint : ((ctxt_dumper * string * int) option))
     (targetPath : int list option) : Stats.stats =
   lookup_prover prover
     (object
-       method run: 'typenode 'symbol 'termnode. ('typenode, 'symbol, 'termnode) Proverapi.context -> Stats.stats =
-         fun ctxt -> clear_stats ();
-                     verify_program_core ~emitter_callback:emitter_callback ctxt options path reportRange reportUseSite reportExecutionForest breakpoint targetPath;
-                     !stats
+      method run: 'typenode 'symbol 'termnode. ('typenode, 'symbol, 'termnode) Proverapi.context ->
+        ('termnode -> string) -> Stats.stats =
+         fun ctxt tnode_to_str -> clear_stats ();
+           let exportpoint = match exportpoint with
+             | Some (dumper,path,line) -> Some ((fun ctxts -> dumper#run ctxts tnode_to_str),path,line)
+             | None -> None
+           in
+           verify_program_core ~emitter_callback:emitter_callback ctxt options
+             path reportRange reportUseSite reportExecutionForest breakpoint exportpoint targetPath;
+           !stats
      end)
 
 (* Region: linker *)

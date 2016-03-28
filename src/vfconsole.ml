@@ -5,33 +5,36 @@ open Verifast0
 open Verifast
 open Arg
 
-let dump_context_to_file ctxts file =
-  let outfile = open_out_bin file in
+let dump_context_to_file file ctxts termnode_to_string =
+  let outfile = open_out_gen [Open_creat; Open_text; Open_append] 0o640 file in
   let last_exec = List.find (function | Executing _ -> true | _ -> false) ctxts in
+  output_string outfile "\n--[another execution]--{\n";
   begin
     match last_exec with
     | (Executing (hp, env, _, str)) ->
       begin
         List.iter (fun (var,value) ->
-            output_string outfile ("(" ^ var ^ " = " ^ value ^ ")\n")) env;
+            output_string outfile ("(" ^ var ^ " = " ^ (termnode_to_string value) ^ ")\n")) env;
         List.iter (function Chunk ((g, literal), targs, coef, ts, size) ->
             (* print_endline (string_of_chunk (Chunk ((g, literal), targs, coef, ts, size))); *)
-            if (g = "integer") then
-              output_string outfile ("(" ^ (List.nth ts 0) ^ " = " ^ (List.nth ts 1) ^ ")\n")
+            if ((termnode_to_string g) = "integer") then
+              output_string outfile ("(" ^ (termnode_to_string (List.nth ts 0)) ^
+                                     " = " ^ (termnode_to_string (List.nth ts 1)) ^ ")\n")
           ) hp
       end
     | _ -> failwith " no exec "
   end ;
   List.iter (function
-      | Assuming tn -> output_string outfile ("(" ^ tn ^ ")\n")
-      | _ -> ()) ctxts
+      | Assuming tn -> output_string outfile ("(" ^ (termnode_to_string tn) ^ ")\n")
+      | _ -> ()) ctxts;
+  output_string outfile "\n}\n"
 
 let _ =
   let print_msg l msg =
     print_endline (string_of_loc l ^ ": " ^ msg)
   in
   let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string option) (path : string)
-      (breakpoint_lino : int option) (breakpoint_ctxt_fname : string option) (emitHighlightedSourceFiles : bool) =
+      (breakpoint_lino : int option) (context_export_file : string option) (export_lino : int option) (emitHighlightedSourceFiles : bool) =
     let verify range_callback =
     let exit l =
       Java_frontend_bridge.unload();
@@ -39,8 +42,27 @@ let _ =
     in
     try
       let use_site_callback declKind declLoc useSiteLoc = () in
-      let my_breakpoint = match breakpoint_lino with |Some lino -> Some (path,lino) | None -> None in
-      let stats = verify_program ~emitter_callback:emitter_callback prover options path range_callback use_site_callback (fun _ -> ()) my_breakpoint None in
+      let my_breakpoint = match breakpoint_lino with | Some lino -> Some (path,lino) | None -> None in
+      let my_exportpoint =
+        match export_lino with
+        | Some lino ->
+          let expfname = match context_export_file with
+            | Some fname -> fname
+            | None -> failwith "must supply also export file"
+          in
+          close_out (open_out expfname);
+          Some ((
+              object
+                method run: 'termnode. 'termnode context list ->
+                  ('termnode -> string) -> unit =
+                  dump_context_to_file expfname
+              end),
+                path,lino)
+        | None -> None
+      in
+      let stats = verify_program ~emitter_callback:emitter_callback prover
+          options path range_callback use_site_callback (fun _ -> ())
+          my_breakpoint my_exportpoint None in
       if print_stats then stats#printStats;
       print_endline ("0 errors found (" ^ (string_of_int (stats#getStmtExec)) ^ " statements verified)");
       Java_frontend_bridge.unload();
@@ -57,11 +79,6 @@ let _ =
         let _ = print_endline ("Env: " ^ string_of_env env) in
         let _ = print_endline ("Failed query: " ^ phi) in
         *)
-      begin
-        match breakpoint_ctxt_fname with
-        | Some fname -> dump_context_to_file ctxts fname
-        | None -> ()
-      end ;
       let _ = print_msg l msg in
       exit 1
     in
@@ -189,7 +206,8 @@ let _ =
   let runtime: string option ref = ref None in
   let provides = ref [] in
   let breakpoint_lino : int option ref = ref None in
-  let breakpoint_context_file : string option ref = ref None in
+  let context_export_file : string option ref = ref None in
+  let export_lino : int option ref = ref None in
   let keepProvideFiles = ref false in
   let include_paths: string list ref = ref [] in
   let library_paths: string list ref = ref ["CRT"] in
@@ -234,7 +252,8 @@ let _ =
             ; "-provides", String (fun path -> provides := !provides @ [path]), " "
             ; "-keep_provide_files", Set keepProvideFiles, " "
             ; "-breakpoint", Int (fun brp -> breakpoint_lino := Some brp), "Set the breakpoint line."
-            ; "-breakpoint_context_file", String (fun f -> breakpoint_context_file := Some f), "File to store the logical context of the breakpoint."
+            ; "-context_export_file", String (fun f -> context_export_file := Some f), "File to store the logical context of the exportpoint."
+            ; "-exportpoint", Int (fun ctp -> export_lino := Some ctp), "Set the line number for context dumps"
             ; "-emit_sexpr",
               String begin fun str ->
                 outputSExpressions := Some str;
@@ -287,7 +306,7 @@ let _ =
             | None             -> ()
         in
         verify ~emitter_callback:emitter_callback !stats options !prover
-          filename !breakpoint_lino !breakpoint_context_file !emitHighlightedSourceFiles;
+          filename !breakpoint_lino !context_export_file !export_lino !emitHighlightedSourceFiles;
         allModules := ((Filename.chop_extension filename) ^ ".vfmanifest")::!allModules
       end
     else if Filename.check_suffix filename ".o" then

@@ -21,6 +21,7 @@ module type VERIFY_PROGRAM_ARGS = sig
   val reportUseSite: decl_kind -> loc -> loc -> unit
   val reportExecutionForest: node list ref -> unit
   val breakpoint: (string * int) option
+  val exportpoint: ((termnode Verifast0.context list -> unit) * string * int) option
   val targetPath: int list option
 end
 
@@ -119,7 +120,10 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
 
   let assert_false h env l msg url =
     raise (SymbolicExecutionError (pprint_context_stack !contextStack, "false", l, msg, url))
-  
+
+  let dump_context dumper =
+    dumper !contextStack
+
   let push_node l msg =
     let oldPath, oldBranch, oldTargetPath = !currentPath, !currentBranch, !targetPath in
     targetPath :=

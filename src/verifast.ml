@@ -3143,6 +3143,7 @@ let verify_program_core (* ?verify_program_core *)
     let breakpoint = breakpoint
     let exportpoint = exportpoint
     let targetPath = targetPath
+    let tolerate_errors = match exportpoint with | Some _ -> true | None -> false
   end) in
   ()
 

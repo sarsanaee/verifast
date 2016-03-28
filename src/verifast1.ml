@@ -23,6 +23,7 @@ module type VERIFY_PROGRAM_ARGS = sig
   val breakpoint: (string * int) option
   val exportpoint: ((termnode Verifast0.context list -> unit) * string * int) option
   val targetPath: int list option
+  val tolerate_errors: bool
 end
 
 module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
@@ -5029,7 +5030,13 @@ let check_if_list_is_defined () =
   let assert_term t h env l msg url = 
     !stats#proverOtherQuery;
     if not (ctxt#query t) then
-      assert_false h env l msg url
+      begin
+        assert_false h env l msg url
+        if tolerate_errors then
+          printf "Tolerated symbolic execution error: %s  %s\n" msg (ctxt#pprint t)
+        else
+          raise (SymbolicExecutionError (pprint_context_stack !contextStack, ctxt#pprint t, l, msg, url));
+      end
 
   let rec prover_type_term l tp = 
     match tp with

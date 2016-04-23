@@ -17,9 +17,9 @@ let dump_context_to_file file ctxts termnode_to_string =
             output_string outfile ("(" ^ var ^ " = " ^ (termnode_to_string value) ^ ")\n")) env;
         List.iter (function Chunk ((g, literal), targs, coef, ts, size) ->
             (* print_endline (string_of_chunk (Chunk ((g, literal), targs, coef, ts, size))); *)
-            if ((termnode_to_string g) = "integer") then
-              output_string outfile ("(" ^ (termnode_to_string (List.nth ts 0)) ^
-                                     " = " ^ (termnode_to_string (List.nth ts 1)) ^ ")\n")
+            output_string outfile ("(" ^ (termnode_to_string g) ^ "(");
+            output_string outfile (String.concat ", " (List.map termnode_to_string ts));
+            output_string outfile "))\n";
           ) hp
       end
     | _ -> failwith " no exec "

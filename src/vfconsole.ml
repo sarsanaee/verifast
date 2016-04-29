@@ -27,7 +27,9 @@ let dump_context_to_file file ctxts termnode_to_string =
   List.iter (function
       | Assuming tn -> output_string outfile ("(" ^ (termnode_to_string tn) ^ ")\n")
       | _ -> ()) ctxts;
-  output_string outfile "\n}\n"
+  output_string outfile "\n}\n";
+  flush outfile;
+  close_out outfile
 
 let _ =
   let print_msg l msg =

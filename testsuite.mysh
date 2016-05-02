@@ -31,6 +31,9 @@ cd examples
   cd BeepDriver
     mysh < BeepKernel.mysh
   cd ..
+  cd relaxed
+    mysh < relaxed.mysh
+  cd ..
   cd shared_boxes
     ifz3 verifast -c sblock.c
     verifast_both -c sglock.c
@@ -194,6 +197,9 @@ cd examples
       verifast_both -I . -c usbmouse.c
       verifast -I . -c -prover redux usbkbd_verified.c
     cd ..
+  cd ..
+  cd verifythis2016
+    mysh < verify.mysh
   cd ..
   cd generic_functypedef
     mysh < runtests.mysh

@@ -67,20 +67,16 @@ let string_of_inductiveness inductiveness =
   | Inductiveness_Inductive -> "inductive"
   | Inductiveness_CoInductive -> "coinductive"
   
+type signedness = Signed | Unsigned
 
 type type_ = (* ?type_ *)
     Bool
   | Void
-  | IntType
-  | UShortType
-  | ShortType
-  | UintPtrType  (* The uintptr_t type from the C99 standard. It's an integer type big enough to hold a pointer value. *)
+  | Int of signedness * int   (* size in bytes *)
   | RealType  (* Mathematical real numbers. Used for fractional permission coefficients. Also used for reasoning about floating-point code. *)
   | Float
   | Double
   | LongDouble
-  | UChar
-  | Char
   | StructType of string
   | PtrType of type_
   | FuncType of string   (* The name of a typedef whose body is a C function type. *)
@@ -100,9 +96,30 @@ type type_ = (* ?type_ *)
   | RefType of type_ (* not a real type; used only for locals whose address is taken *)
   | PluginInternalType of DynType.dyn
 
+let int_size = 4
+let intType = Int (Signed, int_size)
+
+let integer_promotion t = (* C11 6.3.1.1 *)
+  match t with
+  | Int (_, n) when n < int_size -> intType
+  | _ -> t
+
+let usual_arithmetic_conversion t1 t2 = (* C11 6.3.1.8 *)
+  match t1, t2 with
+    LongDouble, _ | _, LongDouble -> LongDouble
+  | Double, _ | _, Double -> Double
+  | Float, _ | _, Float -> Float
+  | t1, t2 ->
+    let t1 = integer_promotion t1 in
+    let t2 = integer_promotion t2 in
+    match t1, t2 with
+      Int (s1, n1), Int (s2, n2) when s1 = s2 -> Int (s1, max n1 n2)
+    | Int (Signed, n1), Int (Unsigned, n2) -> if n1 <= n2 then t2 else t1
+    | Int (Unsigned, n1), Int (Signed, n2) -> if n2 <= n1 then t1 else t2
+
 let is_arithmetic_type t =
   match t with
-    IntType|UintPtrType|ShortType|UShortType|Char|UChar|RealType|Float|Double|LongDouble -> true
+    Int (Signed, 4)|Int (Unsigned, 4)|Int (Signed, 2)|Int (Unsigned, 2)|Int (Signed, 1)|Int (Unsigned, 1)|RealType|Float|Double|LongDouble -> true
   | _ -> false
 
 type prover_type = ProverInt | ProverBool | ProverReal | ProverInductive (* ?prover_type *)

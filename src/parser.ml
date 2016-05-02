@@ -123,7 +123,7 @@ module Scala = struct
       begin
         match (tn, targs) with
           ("Unit", []) -> ManifestTypeExpr (l, Void)
-        | ("Int", []) -> ManifestTypeExpr (l, IntType)
+        | ("Int", []) -> ManifestTypeExpr (l, intType)
         | ("Array", [t]) -> ArrayTypeExpr (l, t)
         | (_, []) -> IdentTypeExpr (l, None, tn)
         | _ -> raise (ParseException (l, "Type arguments are not supported."))
@@ -696,37 +696,37 @@ and
 | [< '(l, Kwd "const"); t0 = parse_primary_type >] -> t0
 | [< '(l, Kwd "register"); t0 = parse_primary_type >] -> t0
 | [< '(l, Kwd "struct"); '(_, Ident s) >] -> StructTypeExpr (l, s)
-| [< '(l, Kwd "enum"); '(_, Ident _) >] -> ManifestTypeExpr (l, IntType)
-| [< '(l, Kwd "int") >] -> ManifestTypeExpr (l, IntType)
+| [< '(l, Kwd "enum"); '(_, Ident _) >] -> ManifestTypeExpr (l, intType)
+| [< '(l, Kwd "int") >] -> ManifestTypeExpr (l, intType)
 | [< '(l, Kwd "float") >] -> ManifestTypeExpr (l, Float)
 | [< '(l, Kwd "double") >] -> ManifestTypeExpr (l, Double)
-| [< '(l, Kwd "short") >] -> ManifestTypeExpr(l, ShortType)
+| [< '(l, Kwd "short") >] -> ManifestTypeExpr(l, Int (Signed, 2))
 | [< '(l, Kwd "long");
      t = begin parser
-       [< '(_, Kwd "int") >] -> ManifestTypeExpr (l, IntType);
+       [< '(_, Kwd "int") >] -> ManifestTypeExpr (l, intType);
      | [< '(_, Kwd "double") >] -> ManifestTypeExpr (l, LongDouble);
      | [< '(_, Kwd "long") >] -> raise (ParseException (l, "long long types are not yet supported."));
-     | [< >] -> ManifestTypeExpr (l, IntType)
+     | [< >] -> ManifestTypeExpr (l, intType)
      end
    >] -> t
 | [< '(l, Kwd "signed"); t0 = parse_primary_type >] ->
   (match t0 with
-     (ManifestTypeExpr (_, IntType) | ManifestTypeExpr (_, ShortType) |
-      ManifestTypeExpr (_, Char)) -> t0
+     (ManifestTypeExpr (_, Int (Signed, 4)) | ManifestTypeExpr (_, Int (Signed, 2)) |
+      ManifestTypeExpr (_, Int (Signed, 1))) -> t0
    | _ -> raise (ParseException (l, "This type cannot be signed.")))
 | [< '(l, Kwd "unsigned"); t0 = parse_primary_type >] ->
   (match t0 with
-     ManifestTypeExpr (l, IntType) -> ManifestTypeExpr (l, UintPtrType)
-   | ManifestTypeExpr (l, ShortType) -> ManifestTypeExpr (l, UShortType)
-   | ManifestTypeExpr (l, Char) -> ManifestTypeExpr (l, UChar)
+     ManifestTypeExpr (l, Int (Signed, 4)) -> ManifestTypeExpr (l, Int (Unsigned, 4))
+   | ManifestTypeExpr (l, Int (Signed, 2)) -> ManifestTypeExpr (l, Int (Unsigned, 2))
+   | ManifestTypeExpr (l, Int (Signed, 1)) -> ManifestTypeExpr (l, Int (Unsigned, 1))
    | _ -> raise (ParseException (l, "This type cannot be unsigned.")))
-| [< '(l, Kwd "uintptr_t") >] -> ManifestTypeExpr (l, UintPtrType)
+| [< '(l, Kwd "uintptr_t") >] -> ManifestTypeExpr (l, Int (Unsigned, 4))
 | [< '(l, Kwd "real") >] -> ManifestTypeExpr (l, RealType)
 | [< '(l, Kwd "bool") >] -> ManifestTypeExpr (l, Bool)
 | [< '(l, Kwd "boolean") >] -> ManifestTypeExpr (l, Bool)
 | [< '(l, Kwd "void") >] -> ManifestTypeExpr (l, Void)
-| [< '(l, Kwd "char") >] -> ManifestTypeExpr (l, Char)
-| [< '(l, Kwd "byte") >] -> ManifestTypeExpr (l, Char)
+| [< '(l, Kwd "char") >] -> ManifestTypeExpr (l, Int (Signed, 1))
+| [< '(l, Kwd "byte") >] -> ManifestTypeExpr (l, Int (Signed, 1))
 | [< '(l, Kwd "predicate");
      '(_, Kwd "(");
      ts = rep_comma parse_paramtype;
@@ -1216,7 +1216,7 @@ and
   parse_expr_primary = parser
   [< '(l, Kwd "true") >] -> True l
 | [< '(l, Kwd "false") >] -> False l
-| [< '(l, CharToken c) >] -> IntLit(l, big_int_of_int (Char.code c), ref (Some Char))
+| [< '(l, CharToken c) >] -> IntLit(l, big_int_of_int (Char.code c), ref (Some (Int (Signed, 1))))
 | [< '(l, Kwd "null") >] -> Null l
 | [< '(l, Kwd "currentThread") >] -> Var (l, "currentThread")
 | [< '(l, Kwd "varargs") >] -> Var (l, "varargs")
@@ -1264,7 +1264,7 @@ and
      (* TODO: support UTF-8 *)
      if !lexer_in_ghost_range then
        let chars = chars_of_string s in
-       let es = List.map (fun c -> IntLit(l, big_int_of_int (Char.code c), ref (Some Char))) chars in
+       let es = List.map (fun c -> IntLit(l, big_int_of_int (Char.code c), ref (Some (Int (Signed, 1))))) chars in
        InitializerList(l, es)
      else
        StringLit (l, String.concat "" (s::ss))

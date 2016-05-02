@@ -59,16 +59,16 @@ let rec string_of_type t =
   match t with
     Bool -> "bool"
   | Void -> "void"
-  | IntType -> "int"
+  | Int (Signed, 4) -> "int"
   | Float -> "float"
   | Double -> "double"
   | LongDouble -> "long double"
-  | UShortType -> "ushort"
-  | ShortType -> "short"
-  | UintPtrType -> "uintptr_t"
+  | Int (Unsigned, 2) -> "ushort"
+  | Int (Signed, 2) -> "short"
+  | Int (Unsigned, 4) -> "uintptr_t"
   | RealType -> "real"
-  | UChar -> "uint8"
-  | Char -> "int8"
+  | Int (Unsigned, 1) -> "uint8"
+  | Int (Signed, 1) -> "int8"
   | InductiveType (i, []) -> i
   | InductiveType (i, targs) -> i ^ "<" ^ String.concat ", " (List.map string_of_type targs) ^ ">"
   | ObjType l -> "class " ^ l

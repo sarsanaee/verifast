@@ -135,7 +135,7 @@ module Assertions(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         [] -> cont (Chunk ((symb, true), [], tcoef, [tp; tv], None)::h0)
       | Chunk (g, targs', tcoef', [tp'; tv'], _) as chunk::h when predname_eq g pred_symb ->
         if tcoef == real_unit || tcoef' == real_unit then
-          assume_neq tp tp' (fun _ -> iter h)
+          iter h (* assume_neq tp tp' (fun _ -> iter h) *)
         else if definitely_equal tp tp' then
         begin
           assume (ctxt#mk_eq tv tv') $. fun () ->

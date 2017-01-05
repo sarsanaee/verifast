@@ -14,6 +14,9 @@ cd examples
   cd crypto_with_flow
     mysh -cpus 1 < crypto_with_flow.mysh
   cd ..
+  cd crypto_ccs
+    mysh -cpus 1 < crypto_ccs.mysh
+  cd ..
   cd floating_point
     verifast_both -c sqrt.c
   cd ..
@@ -25,6 +28,7 @@ cd examples
   verifast_both -disable_overflow_check -c arraylist.c
   verifast_both -disable_overflow_check threading.o barrier.c
   verifast_both -c static_array.c
+  verifast -c -disable_overflow_check typedef_cast.c
   verifast_both -c automation.c
   ifz3 verifast -disable_overflow_check priorityqueue-forall_nth.c
   verifast_both set.c
@@ -152,6 +156,7 @@ cd examples
   cd module_imports
     mysh -cpus 1 < module_imports.mysh
   cd ..
+  verifast_both -c multiset_abstract_type.c
   cd linking
     mysh < linking.mysh
   cd ..
@@ -168,6 +173,7 @@ cd examples
     verifast_both threading.o atomics.o queue.c queue_client.c
   cd ..
   verifast_both -c tokenizer_test.c
+  verifast_both -c truncating.c
   verifast_both -disable_overflow_check stringBuffers.c tokenizer.c ghostlist.o rcl.c
   verifast_both reallittest.c
   verifast_both -disable_overflow_check ref_points_to_syntax.c
@@ -283,6 +289,9 @@ cd examples
     verifast_both -c SpouseFinal.java
     verifast_both -c Stack.java
     verifast_both -c -disable_overflow_check -provides "main_class Program" StaticFields.java
+    cd termination
+      mysh < termination.mysh
+    cd ..
     verifast_both -c ThreadRun.java
     verifast_both -c Tree.java
     verifast_both -c StringLiterals.java
@@ -349,6 +358,7 @@ cd tutorial_solutions
   verifast_both -c -disable_overflow_check predctors.c
   verifast_both -c -disable_overflow_check threads0.c
   verifast_both -c -disable_overflow_check threads.c
+  verifast_both -c -disable_overflow_check fractions0.c
   verifast_both -c -disable_overflow_check fractions.c
   verifast_both -c -disable_overflow_check precise.c
   verifast_both -c -disable_overflow_check precise_bad_merge.c
@@ -372,10 +382,12 @@ cd tests
   verifast_both -c test-pattern-match-constructor-subtyping.c
   verifast_both -c test-octal-number.c
   verifast_both -c integral-ghost-types.c
+  verifast_both -c -allow_should_fail longlong.c
   verifast_both -c test-precise-predicate-pointsto.c
   cd copredicates
     mysh < run.mysh
   cd ..
+  verifast_both -c prodlemfuncptrchunk_local_lems.c
   cd lemma_ptrs_with_nonghostcallersonly
     mysh < run.mysh
   cd ..

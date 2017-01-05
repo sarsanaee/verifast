@@ -28,7 +28,7 @@ let ghost_keywords = [
   "produce_lemma_function_pointer_chunk"; "duplicate_lemma_function_pointer_chunk"; "produce_function_pointer_chunk";
   "producing_box_predicate"; "producing_handle_predicate"; "producing_fresh_handle_predicate"; "box"; "handle"; "any"; "split_fraction"; "by"; "merge_fractions";
   "unloadable_module"; "decreases"; "load_plugin"; "forall_"; "import_module"; "require_module"; ".."; "extends"; "permbased";
-  "terminates";
+  "terminates"; "abstract_type"
 ]
 
 let c_keywords = [
@@ -36,7 +36,8 @@ let c_keywords = [
   "define"; "endif"; "&"; "goto"; "uintptr_t"; "INT_MIN"; "INT_MAX";
   "UINTPTR_MAX"; "enum"; "static"; "signed"; "unsigned"; "long";
   "const"; "volatile"; "register"; "ifdef"; "elif"; "undef";
-  "SHRT_MIN"; "SHRT_MAX"; "USHRT_MAX"; "UINT_MAX"; "UCHAR_MAX"
+  "SHRT_MIN"; "SHRT_MAX"; "USHRT_MAX"; "UINT_MAX"; "UCHAR_MAX";
+  "LLONG_MIN"; "LLONG_MAX"; "ULLONG_MAX";
 ]
 
 let java_keywords = [
@@ -91,6 +92,10 @@ type spec_clause = (* ?spec_clause *)
 | EnsuresClause of asn
 | TerminatesClause of loc
 
+let next_body_rank =
+  let counter = ref 0 in
+  fun () -> incr counter; !counter
+
 (* A toy Scala parser. *)
 module Scala = struct
 
@@ -107,7 +112,7 @@ module Scala = struct
     parse_method = parser
       [< '(l, Kwd "def"); '(_, Ident mn); ps = parse_paramlist; t = parse_type_ann; co = parse_contract; '(_, Kwd "=");'(_, Kwd "{"); ss = rep parse_stmt; '(closeBraceLoc, Kwd "}")>] ->
       let rt = match t with ManifestTypeExpr (_, Void) -> None | _ -> Some t in
-      Meth (l, Real, rt, mn, ps, Some co,Some (ss, closeBraceLoc), Static, Public, false)
+      Meth (l, Real, rt, mn, ps, Some co, Some ((ss, closeBraceLoc), next_body_rank ()), Static, Public, false)
   and
     parse_paramlist = parser
       [< '(_, Kwd "("); ps = rep_comma parse_param; '(_, Kwd ")") >] -> ps
@@ -135,7 +140,7 @@ module Scala = struct
   and
     parse_contract = parser
       [< '(_, Kwd "/*@"); '(_, Kwd "requires"); pre = parse_asn; '(_, Kwd "@*/");
-         '(_, Kwd "/*@"); '(_, Kwd "ensures"); post = parse_asn; '(_, Kwd "@*/") >] -> (pre, post, [])
+         '(_, Kwd "/*@"); '(_, Kwd "ensures"); post = parse_asn; '(_, Kwd "@*/") >] -> (pre, post, [], false)
   and
     parse_asn = parser
       [< '(_, Kwd "("); a = parse_asn; '(_, Kwd ")") >] -> a
@@ -144,7 +149,7 @@ module Scala = struct
     parse_primary_expr = parser
       [< '(l, Kwd "true") >] -> True l
     | [< '(l, Kwd "false") >] -> False l
-    | [< '(l, Int n) >] -> IntLit (l, n)
+    | [< '(l, Int (n, dec, usuffix, lsuffix)) >] -> IntLit (l, n, dec, usuffix, lsuffix)
     | [< '(l, Ident x) >] -> Var (l, x)
   and
     parse_add_expr = parser
@@ -186,6 +191,11 @@ let set_language lang = language := lang
 (* TODO: find a better solution *)
 let enforce_annotations = ref false
 let set_enforce_annotations v = enforce_annotations := v
+
+(* Ugly hack *)
+let typedefs: (string, unit) Hashtbl.t = Hashtbl.create 64
+let register_typedef g = Hashtbl.add typedefs g ()
+let is_typedef g = Hashtbl.mem typedefs g
 
 let rec parse_decls lang enforceAnnotations ?inGhostHeader =
   set_language lang;
@@ -370,26 +380,25 @@ and
     epost = opt parse_throws_clause;
     (ss, co) = parser
       [< '(_, Kwd ";"); spec = opt parse_spec >] -> (None, spec)
-    | [< spec = opt parse_spec; ss = parse_some_block >] -> (ss, spec)
+    | [< spec = opt parse_spec; '(l, Kwd "{"); ss = parse_stmts; '(closeBraceLoc, Kwd "}") >] -> (Some ((ss, closeBraceLoc), next_body_rank ()), spec)
     >] ->
     let contract =
       let epost = match epost with None -> [] | Some(epost) -> epost in
       match co with
       | Some(pre, post, terminates) -> 
-        if terminates then raise (ParseException (l, "'terminates' clauses on methods are not yet supported."));
         let epost = List.map (fun (tp, e) -> 
           (tp, match e with 
             None -> raise (ParseException (l, "If you give a method a contract, you must also give ensures clauses for the thrown expceptions.")) | 
             Some(e) -> e)) epost 
         in
-        Some(pre, post, epost)
+        Some(pre, post, epost, terminates)
       | None -> 
         if !enforce_annotations then None else
         begin
          let pre = ExprAsn(l, False(l)) in
          let post = ExprAsn(l, True(l)) in
          let epost = List.map (fun (tp, e) -> (tp, match e with None -> ExprAsn(l, True(l)) | Some(e) -> e)) epost in
-         Some (pre, post, epost)
+         Some (pre, post, epost, false)
         end
     in
     (ps, contract, ss)
@@ -439,7 +448,7 @@ and
              | Some te -> [TypedefDecl (l, te, g)]
          end
     end
-  >] -> ds
+  >] -> register_typedef g; ds
 | [< '(_, Kwd "enum"); '(l, Ident n); '(_, Kwd "{");
      elems = rep_comma (parser [< '(_, Ident e); init = opt (parser [< '(_, Kwd "="); e = parse_expr >] -> e) >] -> (e, init));
      '(_, Kwd "}"); '(_, Kwd ";"); >] ->
@@ -518,6 +527,7 @@ and
   | [< '(l, Kwd "load_plugin"); '(lx, Ident x); '(_, Kwd ";") >] -> [LoadPluginDecl (l, lx, x)]
   | [< '(l, Kwd "import_module"); '(_, Ident g); '(lx, Kwd ";") >] -> [ImportModuleDecl (l, g)]
   | [< '(l, Kwd "require_module"); '(_, Ident g); '(lx, Kwd ";") >] -> [RequireModuleDecl (l, g)]
+  | [< '(l, Kwd "abstract_type"); '(_, Ident t); '(_, Kwd ";") >] -> [AbstractTypeDecl (l, t)]
 and
   parse_action_decls = parser
   [< ad = parse_action_decl; ads = parse_action_decls >] -> ad::ads
@@ -677,7 +687,7 @@ and
   [< te0 = parse_type; '(l, Ident f);
      te = parser
         [< '(_, Kwd ";") >] -> te0
-      | [< '(_, Kwd "["); '(ls, Int size); '(_, Kwd "]"); '(_, Kwd ";") >] ->
+      | [< '(_, Kwd "["); '(ls, Int (size, _, _, _)); '(_, Kwd "]"); '(_, Kwd ";") >] ->
             if int_of_big_int size <= 0 then
               raise (ParseException (ls, "Array must have size > 0."));
             StaticArrayTypeExpr (l, te0, int_of_big_int size)
@@ -688,6 +698,19 @@ and
 and
   parse_type = parser
   [< t0 = parse_primary_type; t = parse_type_suffix t0 >] -> t
+and
+  parse_integer_size_specifier = parser
+  [< '(_, Kwd "char") >] -> 1
+| [< '(_, Kwd "short") >] -> 2
+| [< '(_, Kwd "long");
+     n = begin parser
+       [< '(_, Kwd "long") >] -> 8
+     | [< >] -> 4
+     end >] -> n
+| [< >] -> 4
+and
+  parse_integer_type_rest = parser
+  [< n = parse_integer_size_specifier; _ = opt (parser [< '(_, Kwd "int") >] -> ()) >] -> n
 and
   parse_primary_type = parser
   [< '(l, Kwd "volatile"); t0 = parse_primary_type >] -> t0
@@ -704,17 +727,11 @@ and
        [< '(_, Kwd "int") >] -> ManifestTypeExpr (l, intType);
      | [< '(_, Kwd "double") >] -> ManifestTypeExpr (l, LongDouble);
      | [< '(_, Kwd "long"); _ = opt (parser [< '(_, Kwd "int") >] -> ()) >] -> ManifestTypeExpr (l, Int (Signed, 8))
-     | [< >] -> ManifestTypeExpr (l, intType)
+     | [< >] -> ManifestTypeExpr (l, match !language with CLang -> intType | Java -> Int (Signed, 8))
      end
    >] -> t
-| [< '(l, Kwd "signed"); t0 = parse_primary_type >] ->
-  (match t0 with
-     (ManifestTypeExpr (_, Int (Signed, _))) -> t0
-   | _ -> raise (ParseException (l, "This type cannot be signed.")))
-| [< '(l, Kwd "unsigned"); t0 = parse_primary_type >] ->
-  (match t0 with
-   | ManifestTypeExpr (l, Int (Signed, n)) -> ManifestTypeExpr (l, Int (Unsigned, n))
-   | _ -> raise (ParseException (l, "This type cannot be unsigned.")))
+| [< '(l, Kwd "signed"); n = parse_integer_type_rest >] -> ManifestTypeExpr (l, Int (Signed, n))
+| [< '(l, Kwd "unsigned"); n = parse_integer_type_rest >] -> ManifestTypeExpr (l, Int (Unsigned, n))
 | [< '(l, Kwd "uintptr_t") >] -> ManifestTypeExpr (l, Int (Unsigned, 4))
 | [< '(l, Kwd "real") >] -> ManifestTypeExpr (l, RealType)
 | [< '(l, Kwd "bool") >] -> ManifestTypeExpr (l, Bool)
@@ -826,10 +843,6 @@ and
 and
   parse_block = parser
   [< '(l, Kwd "{"); ss = parse_stmts; '(_, Kwd "}") >] -> ss
-and
-  parse_some_block = parser
-  [< '(l, Kwd "{"); ss = parse_stmts; '(closeBraceLoc, Kwd "}") >] -> Some (ss,closeBraceLoc)
-| [<>] -> None
 and
   parse_block_stmt = parser
   [< '(l, Kwd "{");
@@ -1052,7 +1065,7 @@ and
 and parse_array_braces te = parser
   [< '(l, Kwd "[");
      te = begin parser
-       [< '(lsize, Int size) >] ->
+       [< '(lsize, Int (size, _, _, _)) >] ->
        if sign_big_int size <= 0 then raise (ParseException (lsize, "Array must have size > 0."));
        StaticArrayTypeExpr (l, te, int_of_big_int size)
      | [< >] ->
@@ -1183,7 +1196,12 @@ and
   [< e0 = parse_expr_rel; e = parse_bitand_expr_rest e0 >] -> e
 and
   parse_expr_rel = parser
-  [< e0 = parse_shift; e = parse_expr_rel_rest e0 >] -> e
+  [< e0 = parse_truncating_expr; e = parse_expr_rel_rest e0 >] -> e
+and
+  parse_truncating_expr = parser
+  [< '(l, Kwd "truncating"); e = parse_expr_suffix >] -> TruncatingExpr (l, e)
+| [< e = peek_in_ghost_range (parser [< '(l, Kwd "truncating"); '(_, Kwd "@*/"); e = parse_expr_suffix >] -> TruncatingExpr (l, e)) >] -> e
+| [< e = parse_shift >] -> e
 and
   parse_shift = parser
   [< e0 = parse_expr_arith; e = parse_shift_rest e0 >] -> e
@@ -1214,7 +1232,7 @@ and
 | [< '(l, CharToken c) >] ->
   if Char.code c > 127 then raise (ParseException (l, "Non-ASCII character literals are not yet supported"));
   let tp = match !language with CLang -> Int (Signed, 1) | Java -> Int (Unsigned, 2) in
-  CastExpr (l, false, ManifestTypeExpr (l, tp), IntLit (l, big_int_of_int (Char.code c)))
+  CastExpr (l, ManifestTypeExpr (l, tp), IntLit (l, big_int_of_int (Char.code c), true, false, NoLSuffix))
 | [< '(l, Kwd "null") >] -> Null l
 | [< '(l, Kwd "currentThread") >] -> Var (l, "currentThread")
 | [< '(l, Kwd "varargs") >] -> Var (l, "varargs")
@@ -1249,37 +1267,50 @@ and
       >]-> r
     | [< >] -> Var (lx, x)
   >] -> ex
-| [< '(l, Int i) >] -> IntLit (l, i)
+| [< '(l, Int (i, dec, usuffix, lsuffix)) >] -> IntLit (l, i, dec, usuffix, lsuffix)
 | [< '(l, RealToken i) >] -> RealLit (l, num_of_big_int i)
 | [< '(l, RationalToken n) >] -> RealLit (l, n)
-| [< '(l, Kwd "INT_MIN") >] -> IntLit (l, big_int_of_string "-2147483648")
-| [< '(l, Kwd "INT_MAX") >] -> IntLit (l, big_int_of_string "2147483647")
-| [< '(l, Kwd "UINTPTR_MAX") >] -> CastExpr (l, false, ManifestTypeExpr (l, Int (Unsigned, 4)), IntLit (l, big_int_of_string "4294967295"))
-| [< '(l, Kwd "UCHAR_MAX") >] -> IntLit (l, big_int_of_string "255")
-| [< '(l, Kwd "SHRT_MIN") >] -> IntLit (l, big_int_of_string "-32767")
-| [< '(l, Kwd "SHRT_MAX") >] -> IntLit (l, big_int_of_string "32767")
-| [< '(l, Kwd "USHRT_MAX") >] -> IntLit (l, big_int_of_string "65535")
-| [< '(l, Kwd "UINT_MAX") >] -> CastExpr (l, false, ManifestTypeExpr (l, Int (Unsigned, 4)), IntLit (l, big_int_of_string "4294967295"))
+| [< '(l, Kwd "INT_MIN") >] -> IntLit (l, big_int_of_string "-2147483648", true, false, NoLSuffix)
+| [< '(l, Kwd "INT_MAX") >] -> IntLit (l, big_int_of_string "2147483647", true, false, NoLSuffix)
+| [< '(l, Kwd "UINTPTR_MAX") >] -> IntLit (l, big_int_of_string "4294967295", true, true, NoLSuffix)
+| [< '(l, Kwd "UCHAR_MAX") >] -> IntLit (l, big_int_of_string "255", true, false, NoLSuffix)
+| [< '(l, Kwd "SHRT_MIN") >] -> IntLit (l, big_int_of_string "-32768", true, false, NoLSuffix)
+| [< '(l, Kwd "SHRT_MAX") >] -> IntLit (l, big_int_of_string "32767", true, false, NoLSuffix)
+| [< '(l, Kwd "USHRT_MAX") >] -> IntLit (l, big_int_of_string "65535", true, false, NoLSuffix)
+| [< '(l, Kwd "UINT_MAX") >] -> IntLit (l, big_int_of_string "4294967295", true, true, NoLSuffix)
+| [< '(l, Kwd "LLONG_MIN") >] -> IntLit (l, big_int_of_string "-9223372036854775808", true, false, NoLSuffix)
+| [< '(l, Kwd "LLONG_MAX") >] -> IntLit (l, big_int_of_string "9223372036854775807", true, false, NoLSuffix)
+| [< '(l, Kwd "ULLONG_MAX") >] -> IntLit (l, big_int_of_string "18446744073709551615", true, true, NoLSuffix)
 | [< '(l, String s); ss = rep (parser [< '(_, String s) >] -> s) >] -> 
      (* TODO: support UTF-8 *)
      if !lexer_in_ghost_range then
        let chars = chars_of_string s in
-       let es = List.map (fun c -> IntLit(l, big_int_of_int (Char.code c))) chars in
+       let es = List.map (fun c -> IntLit(l, big_int_of_int (Char.code c), true, false, NoLSuffix)) chars in
        InitializerList(l, es)
      else
        StringLit (l, String.concat "" (s::ss))
-| [< '(l, Kwd "truncating"); '(_, Kwd "("); t = parse_type; '(_, Kwd ")"); e = parse_expr_suffix >] -> CastExpr (l, true, t, e)
-| [< e = peek_in_ghost_range (parser [< '(l, Kwd "truncating"); '(_, Kwd "@*/"); '(_, Kwd "("); t = parse_type; '(_, Kwd ")"); e = parse_expr_suffix >] -> CastExpr (l, true, t, e)) >] -> e
 | [< '(l, Kwd "(");
-     e = parser
-     [< e0 = parse_expr; '(_, Kwd ")");
-         e = parser
-           [< '(l', Ident y); e = parse_expr_suffix_rest (Var (l', y)) >] -> (match e0 with 
-             Var (lt, x) -> CastExpr (l, false, IdentTypeExpr (lt, None, x), e)
-           | _ -> raise (ParseException (l, "Type expression of cast expression must be identifier: ")))
+     e =
+       let parse_cast = parser [< te = parse_type; '(_, Kwd ")"); e = parse_expr_suffix >] -> CastExpr (l, te, e) in
+       let parse_expr_rest e0 =
+         parser
+           [< '(l', Ident y); e = parse_expr_suffix_rest (Var (l', y)) >] ->
+           begin match e0 with
+             Var (lt, x) -> CastExpr (l, IdentTypeExpr (lt, None, x), e)
+           | _ -> raise (ParseException (l, "Type expression of cast expression must be identifier: "))
+           end
          | [<>] -> e0
-     >] -> e
-   | [< te = parse_type; '(_, Kwd ")"); e = parse_expr_suffix >] -> CastExpr (l, false, te, e)
+       in
+       let parse =
+         parser
+           [< e0 = parse_expr; '(_, Kwd ")"); e = parse_expr_rest e0 >] -> e
+         | [< e = parse_cast >] -> e
+       in
+       begin fun stream -> 
+         match Stream.peek stream with
+           Some (_, Ident x) when is_typedef x -> parse_cast stream
+         | _ -> parse stream
+       end
    >] -> e
 (*
 | [< '(l, Kwd "(");
@@ -1300,11 +1331,11 @@ and
 | [< '(l, Kwd "~"); e = parse_expr_suffix >] -> Operation (l, BitNot, [e])
 | [< '(l, Kwd "-"); e = parse_expr_suffix >] ->
   begin match e with
-    IntLit (_, n) -> IntLit (l, minus_big_int n)
-  | _ -> Operation (l, Sub, [IntLit (l, zero_big_int); e])
+    IntLit (_, n, true, false, lsuffix) when !language = Java && sign_big_int n >= 0 -> IntLit (l, minus_big_int n, true, false, lsuffix)
+  | _ -> Operation (l, Sub, [IntLit (l, zero_big_int, true, false, NoLSuffix); e])
   end
-| [< '(l, Kwd "++"); e = parse_expr_suffix >] -> AssignOpExpr (l, e, Add, IntLit (l, unit_big_int), false)
-| [< '(l, Kwd "--"); e = parse_expr_suffix >] -> AssignOpExpr (l, e, Sub, IntLit (l, unit_big_int), false)
+| [< '(l, Kwd "++"); e = parse_expr_suffix >] -> AssignOpExpr (l, e, Add, IntLit (l, unit_big_int, true, false, NoLSuffix), false)
+| [< '(l, Kwd "--"); e = parse_expr_suffix >] -> AssignOpExpr (l, e, Sub, IntLit (l, unit_big_int, true, false, NoLSuffix), false)
 | [< '(l, Kwd "{"); es = rep_comma parse_expr; '(_, Kwd "}") >] -> InitializerList (l, es)
 and
   parse_switch_expr_clauses = parser
@@ -1339,8 +1370,8 @@ and
           end
        >] -> e
      end; e = parse_expr_suffix_rest e >] -> e
-| [< '(l, Kwd "++"); e = parse_expr_suffix_rest (AssignOpExpr (l, e0, Add, IntLit (l, unit_big_int), true)) >] -> e
-| [< '(l, Kwd "--"); e = parse_expr_suffix_rest (AssignOpExpr (l, e0, Sub, IntLit (l, unit_big_int), true)) >] -> e
+| [< '(l, Kwd "++"); e = parse_expr_suffix_rest (AssignOpExpr (l, e0, Add, IntLit (l, unit_big_int, true, false, NoLSuffix), true)) >] -> e
+| [< '(l, Kwd "--"); e = parse_expr_suffix_rest (AssignOpExpr (l, e0, Sub, IntLit (l, unit_big_int, true, false, NoLSuffix), true)) >] -> e
 | [< '(l, Kwd "("); es = rep_comma parse_expr; '(_, Kwd ")"); e = parse_expr_suffix_rest (match e0 with Read(l', e0', f') -> CallExpr (l', f', [], [], LitPat(e0'):: (List.map (fun e -> LitPat(e)) es), Instance) | _ -> ExprCallExpr (l, e0, es)) >] -> e
 | [< >] -> e0
 and
@@ -1361,18 +1392,18 @@ and
 | [< >] -> e0
 and
   parse_expr_rel_rest e0 = parser
-  [< '(l, Kwd "=="); e1 = parse_expr_arith; e = parse_expr_rel_rest (Operation (l, Eq, [e0; e1])) >] -> e
-| [< '(l, Kwd "!="); e1 = parse_expr_arith; e = parse_expr_rel_rest (Operation (l, Neq, [e0; e1])) >] -> e
-| [< '(l, Kwd "<="); e1 = parse_expr_arith; e = parse_expr_rel_rest (Operation (l, Le, [e0; e1])) >] -> e
-| [< '(l, Kwd ">"); e1 = parse_expr_arith; e = parse_expr_rel_rest (Operation (l, Gt, [e0; e1])) >] -> e
-| [< '(l, Kwd ">="); e1 = parse_expr_arith; e = parse_expr_rel_rest (Operation (l, Ge, [e0; e1])) >] -> e
+  [< '(l, Kwd "=="); e1 = parse_truncating_expr; e = parse_expr_rel_rest (Operation (l, Eq, [e0; e1])) >] -> e
+| [< '(l, Kwd "!="); e1 = parse_truncating_expr; e = parse_expr_rel_rest (Operation (l, Neq, [e0; e1])) >] -> e
+| [< '(l, Kwd "<="); e1 = parse_truncating_expr; e = parse_expr_rel_rest (Operation (l, Le, [e0; e1])) >] -> e
+| [< '(l, Kwd ">"); e1 = parse_truncating_expr; e = parse_expr_rel_rest (Operation (l, Gt, [e0; e1])) >] -> e
+| [< '(l, Kwd ">="); e1 = parse_truncating_expr; e = parse_expr_rel_rest (Operation (l, Ge, [e0; e1])) >] -> e
 | [< '(l, Kwd "instanceof"); tp = parse_expr; e = parse_expr_rel_rest (InstanceOfExpr (l, e0, type_expr_of_expr tp)) >] -> e
 | [< e = parse_expr_lt_rest e0 parse_expr_rel_rest >] -> e
 and
   apply_type_args e targs args =
   match e with
     Var (lx, x) -> CallExpr (lx, x, targs, [], args, Static)
-  | CastExpr (lc, trunc, te, e) -> CastExpr (lc, trunc, te, apply_type_args e targs args)
+  | CastExpr (lc, te, e) -> CastExpr (lc, te, apply_type_args e targs args)
   | Operation (l, Not, [e]) -> Operation (l, Not, [apply_type_args e targs args])
   | Operation (l, BitNot, [e]) -> Operation (l, BitNot, [apply_type_args e targs args])
   | Deref (l, e, ts) -> Deref (l, apply_type_args e targs args, ts)
@@ -1383,7 +1414,7 @@ and
   parse_expr_lt_rest e0 cont = parser
   [< '(l, Kwd "<");
      e = parser
-       [< e1 = parse_expr_arith; e1 = parse_expr_lt_rest e1 (let rec iter e0 = parse_expr_lt_rest e0 iter in iter);
+       [< e1 = parse_truncating_expr; e1 = parse_expr_lt_rest e1 (let rec iter e0 = parse_expr_lt_rest e0 iter in iter);
           e = parser
             [< '(_, Kwd ">"); (* Type argument *)
                args = (parser [< args = parse_patlist >] -> args | [< >] -> []);
@@ -1415,7 +1446,7 @@ and
 | [< >] -> e0
 and
   parse_conj_expr_rest e0 = parser
-  [< '(l, Kwd "&&"); e1 = parse_expr_rel; e = parse_conj_expr_rest (Operation (l, And, [e0; e1])) >] -> e
+  [< '(l, Kwd "&&"); e1 = parse_bitor_expr; e = parse_conj_expr_rest (Operation (l, And, [e0; e1])) >] -> e
 | [< >] -> e0
 and
   parse_disj_expr_rest e0 = parser
@@ -1428,9 +1459,9 @@ and
 | [< '(l, Kwd "-="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Sub, e1, false)
 | [< '(l, Kwd "*="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Mul, e1, false)
 | [< '(l, Kwd "/="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Div, e1, false)
-| [< '(l, Kwd "&="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, And, e1, false)
-| [< '(l, Kwd "|="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Or, e1, false)
-| [< '(l, Kwd "^="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Xor, e1, false)
+| [< '(l, Kwd "&="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, BitAnd, e1, false)
+| [< '(l, Kwd "|="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, BitOr, e1, false)
+| [< '(l, Kwd "^="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, BitXor, e1, false)
 | [< '(l, Kwd "%="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, Mod, e1, false)
 | [< '(l, Kwd "<<="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, ShiftLeft, e1, false)
 | [< '(l, Kwd ">>="); e1 = parse_assign_expr >] -> AssignOpExpr (l, e0, ShiftRight, e1, false)

@@ -97,6 +97,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     let check_expr (pn,ilist) tparams tenv e = check_expr_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e in
     let check_condition (pn,ilist) tparams tenv e = check_condition_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e in
     let check_expr_t (pn,ilist) tparams tenv e tp = check_expr_t_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some pure) e tp in
+    let check_expr_t_pure tenv e tp = check_expr_t_core functypemap funcmap classmap interfmap (pn,ilist) tparams tenv (Some true) e tp in
     let eval env e = if not pure then check_ghost ghostenv l e; eval_non_pure pure h env e in
     let eval_h_core sideeffectfree pure h env e cont =
       if not pure then check_ghost ghostenv l e;
@@ -135,7 +136,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         if stmt_ghostness = Ghost then begin
           if nonghost_callers_only then static_error l "Function pointer chunks cannot be produced for nonghost_callers_only lemmas." None;
           match leminfo with
-            RealFuncInfo (_, _, _, _) -> ()
+            RealFuncInfo (_, _, _) | RealMethodInfo _ -> ()
           | LemInfo (lems, g0, indinfo, nonghost_callers_only) ->
             if not (List.mem fn lems) then static_error l "Function pointer chunks can only be produced for preceding lemmas." None;
             if scope_opt = None then static_error l "produce_lemma_function_pointer_chunk statement must have a body." None
@@ -240,7 +241,13 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
                 let econt _ h env texcep excep = assert_false h [] l "You cannot throw an exception from a produce_function_pointer_chunk statement" None in
                 begin fun tcont ->
                   let (preceding_lemmas, indinfo) = match leminfo with
-                      RealFuncInfo (_, preceding_lemmas, _, _) -> (preceding_lemmas, None)
+                      RealFuncInfo (_, _, _) | RealMethodInfo _ ->
+                      let lems =
+                        flatmap
+                          (function (fn, FuncInfo (funenv, fterm, l, Lemma(_), tparams, rt, ps, nonghost_callers_only, pre, pre_tenv, post, terminates, functype_opt, body, _, _)) -> [fn] | _ -> [])
+                          funcmap
+                      in
+                      (lems, None)
                     | LemInfo (preceding_lemmas, _, indinfo, _) -> (preceding_lemmas, indinfo)
                   in
                   let leminfo_branch =
@@ -347,7 +354,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         match leminfo with
           | LemInfo (lems, g0, indinfo, nonghost_callers_only) ->
               if not(nonghost_callers_only) then static_error l "This construct is not allowed in a context that is not nonghost_callers_only." None
-          | RealFuncInfo (_, _, _, _) -> ()
+          | RealFuncInfo (_, _, _) | RealMethodInfo _ -> ()
       end;
       let (lftn, ftn) =
         match e with
@@ -420,7 +427,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           let (w, _) = check_expr (pn,ilist) tparams tenv e in
           verify_expr false h env None w (fun h env _ -> cont h env) econt
       end
-    | ExprStmt (CallExpr (l, "set_verifast_verbosity", [], [], [LitPat (IntLit (_, n))], Static)) when pure ->
+    | ExprStmt (CallExpr (l, "set_verifast_verbosity", [], [], [LitPat (IntLit (_, n, _, _, _))], Static)) when pure ->
       let oldv = !verbosity in
       set_verbosity (int_of_big_int n);
       let r = cont h env in
@@ -459,10 +466,21 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       iter [] cfds
     | ExprStmt (CallExpr (l, "produce_call_below_perm_", [], [], args, Static)) when pure ->
       if args <> [] then static_error l "produce_call_below_perm_ requires no arguments." None;
+      if language = Java then begin
+        let (_, _, _, _, call_below_perm__symb, _, _) = List.assoc "java.lang.call_below_perm_" predfammap in
+        let cn =
+          match try_assoc current_class tenv, leminfo with
+            Some (ClassOrInterfaceName cn), RealMethodInfo _ -> cn
+          | _, _ -> static_error l "This ghost statement must appear inside a class." None
+        in
+        let classterm = List.assoc cn classterms in
+        let callPermChunk = Chunk ((call_below_perm__symb, true), [], real_unit, [classterm], None) in
+        cont (callPermChunk::h) env
+      end else
       let (_, _, _, _, call_below_perm__symb, _, _) = List.assoc "call_below_perm_" predfammap in
       let g =
         match leminfo with
-          RealFuncInfo (gs, _, g, terminates) -> g
+          RealFuncInfo (gs, g, terminates) -> g
         | LemInfo (lems, g, indinfo, nonghost_callers_only) -> g
       in
       let gterm = List.assoc g funcnameterms in
@@ -1348,7 +1366,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       let xs = (expr_assigned_variables e) @ (block_assigned_variables ss) in
       let xs = List.filter (fun x -> match try_assoc x tenv with None -> false | Some (RefType _) -> false | _ -> true) xs in
       let (p, tenv') = check_asn (pn,ilist) tparams tenv p in
-      let dec = (match dec with None -> None | Some(e) -> Some(check_expr_t (pn,ilist) tparams tenv' e intt)) in
+      let dec = (match dec with None -> None | Some(e) -> Some(check_expr_t_pure tenv' e intt)) in
       consume_asn rules [] h ghostenv env p true real_unit $. fun _ h _ _ _ ->
       let lblenv =
         List.map
@@ -1391,16 +1409,22 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       begin fun cont ->
       match (t_dec, dec) with
         (None, None) ->
-        let consume_call_perm g =
+        let consume_func_call_perm g =
           let gterm = List.assoc g funcnameterms in
           let (_, _, _, _, call_perm__symb, _, _) = List.assoc "call_perm_" predfammap in
           consume_chunk rules h''' [] [] [] l (call_perm__symb, true) [] real_unit dummypat (Some 1) [TermPat gterm] $. fun _ h _ _ _ _ _ _ ->
           cont h
         in
+        let consume_class_call_perm () =
+          let ClassOrInterfaceName cn = List.assoc current_class tenv in
+          let classterm = List.assoc cn classterms in
+          consume_class_call_perm l classterm h''' cont
+        in
         begin match leminfo with
-          RealFuncInfo (gs, _, g, terminates) when terminates -> consume_call_perm g
-        | LemInfo (gs, g, indinfo, nonghost_callers_only) -> consume_call_perm g
-        | _ -> cont h'''
+          RealFuncInfo (gs, g, terminates) -> if terminates then consume_func_call_perm g else cont h'''
+        | LemInfo (gs, g, indinfo, nonghost_callers_only) ->
+          if language = CLang then consume_func_call_perm g else static_error l "Decreases clause required" None
+        | RealMethodInfo rank -> if rank = None then cont h''' else consume_class_call_perm ()
         end
       | (Some t_dec, Some dec) ->
         eval_h_pure h' env''' dec $. fun _ _ t_dec2 ->
@@ -1433,7 +1457,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       let old_xs_tenv = List.map (fun x -> ("old_" ^ x, List.assoc x tenv)) xs in
       let tenv'' = old_xs_tenv @ tenv' in
       let (post, tenv''') = check_asn (pn,ilist) tparams tenv'' post in
-      let dec = match dec with None -> None | Some e -> Some (check_expr_t (pn,ilist) tparams tenv' e intt) in
+      let dec = match dec with None -> None | Some e -> Some (check_expr_t_pure tenv' e intt) in
       let ghostenv' = ghostenv in
       let env' = env in
       consume_asn rules [] h ghostenv env pre true real_unit $. fun _ h ghostenv env _ ->
@@ -1936,7 +1960,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       in
       let leminfo =
         match leminfo with
-          RealFuncInfo (_, _, _, _) ->
+          RealFuncInfo (_, _, _) | RealMethodInfo _ ->
           let lems0 =
             flatmap
               (function (fn, FuncInfo (funenv, fterm, l, Lemma(_), tparams, rt, ps, nonghost_callers_only, pre, pre_tenv, post, terminates, functype_opt, body, _, _)) -> [fn] | _ -> [])
@@ -2396,7 +2420,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       if is_lemma k then 
         (true, LemInfo (lems, g, indinfo, nonghost_callers_only), gs, g::lems, List.map (function (p, t) -> p) ps @ ["#result"])
       else
-        (false, RealFuncInfo (gs, lems, g, terminates), g::gs, lems, [])
+        (false, RealFuncInfo (gs, g, terminates), g::gs, lems, [])
     in
     let env = [(current_thread_name, get_unique_var_symb current_thread_name current_thread_type)] @ penv @ env in
     let _ =
@@ -2508,18 +2532,18 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     else
       success()
   
-  let rec verify_cons (pn,ilist) cfin cn superctors boxes lems cons =
+  let rec verify_cons (pn,ilist) cfin cn supercn superctors boxes lems cons =
     match cons with
       [] -> ()
-    | (sign, (lm, xmap, pre, pre_tenv, post, epost, ss, v))::rest ->
+    | (sign, CtorInfo (lm, xmap, pre, pre_tenv, post, epost, terminates, ss, v))::rest ->
       match ss with
         None ->
         let ((p, _, _), (_, _, _)) = lm in 
         if Filename.check_suffix p ".javaspec" then
-          verify_cons (pn,ilist) cfin cn superctors boxes lems rest
+          verify_cons (pn,ilist) cfin cn supercn superctors boxes lems rest
         else
           static_error lm "Constructor specification is only allowed in javaspec files!" None
-      | Some (Some (ss, closeBraceLoc)) ->
+      | Some (Some ((ss, closeBraceLoc), rank)) ->
         record_fun_timing lm (cn ^ ".<ctor>") begin fun () ->
         if !verbosity >= 1 then Printf.printf "%10.6fs: %s: Verifying constructor %s\n" (Perf.time()) (string_of_loc lm) (string_of_sign (cn, sign));
         execute_branch begin fun () ->
@@ -2527,7 +2551,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         let env = get_unique_var_symbs_non_ghost ([(current_thread_name, current_thread_type)] @ xmap) in
         let (sizemap, indinfo) = switch_stmt ss env in
         let (ss, explicitsupercall) = match ss with SuperConstructorCall(l, es) :: body -> (body, Some(SuperConstructorCall(l, es))) | _ -> (ss, None) in
-        let (in_pure_context, leminfo, ghostenv) = (false, RealFuncInfo ([], lems, "", false), []) in
+        let (in_pure_context, leminfo, ghostenv) = (false, RealMethodInfo (if terminates then Some rank else None), []) in
         begin
           produce_asn [] [] ghostenv env pre real_unit None None $. fun h ghostenv env ->
           let this = get_unique_var_symb "this" (ObjType cn) in
@@ -2560,11 +2584,17 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
                 match try_assoc argtypes superctors with
                   None ->
                   static_error lm "There is no superclass constructor that matches the superclass constructor call" None
-                | Some (lc0, xmap0, pre0, pre_tenv0, post0, epost0, _, v0) ->
+                | Some (CtorInfo (lc0, xmap0, pre0, pre_tenv0, post0, epost0, terminates0, ss0, v0)) ->
                   with_context (Executing (h, env, lm, "Implicit superclass constructor call")) $. fun () ->
+                  if terminates && not terminates0 then static_error lm "Superclass constructor is not declared as 'terminates'" None;
+                  let is_upcall =
+                    match ss0 with
+                      Some (Some (_, rank0)) -> rank0 < rank
+                    | _ -> true
+                  in
                   let eval_h h env e cont = verify_expr false (pn,ilist) [] false leminfo funcmap sizemap tenv ghostenv h env None e cont econt in
                   let pats = (List.map (fun e -> SrcPat (LitPat e)) args) in
-                  verify_call funcmap eval_h lm (pn, ilist) None None [] pats ([], None, xmap0, ["this", this], pre0, post0, Some(epost0), false, v0) false leminfo sizemap h [] tenv ghostenv env (fun h env _ ->
+                  verify_call funcmap eval_h lm (pn, ilist) None None [] pats ([], None, xmap0, ["this", this], pre0, post0, Some(epost0), terminates0, v0) false is_upcall (Some supercn) leminfo sizemap h [] tenv ghostenv env (fun h env _ ->
                   cont h) econt
             end $. fun h ->
             let fds = get_fields (pn,ilist) cn lm in
@@ -2593,18 +2623,18 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         end
         end
         end;
-        verify_cons (pn,ilist) cfin cn superctors boxes lems rest
+        verify_cons (pn,ilist) cfin cn supercn superctors boxes lems rest
   
   let rec verify_meths (pn,ilist) cfin cabstract boxes lems meths=
     match meths with
       [] -> ()
-    | ((g,sign), (l,gh, rt, ps,pre,pre_tenv,post,epost,pre_dyn,post_dyn,epost_dyn,sts,fb,v, _,abstract))::meths ->
+    | ((g,sign), MethodInfo (l,gh, rt, ps,pre,pre_tenv,post,epost,pre_dyn,post_dyn,epost_dyn,terminates,sts,fb,v, _,abstract))::meths ->
       if abstract && not cabstract then static_error l "Abstract method can only appear in abstract class." None;
       match sts with
         None -> let ((p,_,_),(_,_,_))=l in 
           if (Filename.check_suffix p ".javaspec") || abstract then verify_meths (pn,ilist) cfin cabstract boxes lems meths
           else static_error l "Method specification is only allowed in javaspec files!" None
-      | Some (Some (ss, closeBraceLoc)) ->
+      | Some (Some ((ss, closeBraceLoc), rank)) ->
         record_fun_timing l g begin fun () ->
         if !verbosity >= 1 then Printf.printf "%10.6fs: %s: Verifying method %s\n" (Perf.time()) (string_of_loc l) g;
         if abstract then static_error l "Abstract method cannot have implementation." None;
@@ -2613,7 +2643,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         let (in_pure_context, leminfo, ghostenv) =
           match gh with
             Ghost -> (true, LemInfo (lems, "<method>", None, false), List.map (function (p, t) -> p) ps @ ["#result"])
-          | Real -> (false, RealFuncInfo ([], lems, "<method>", false), [])
+          | Real -> (false, RealMethodInfo (if terminates then Some rank else None), [])
         in
         begin
           let env = get_unique_var_symbs_non_ghost (ps @ [(current_thread_name, current_thread_type)]) in (* actual params invullen *)
@@ -2663,7 +2693,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           (cctors, cfinal)
       in
       if superfinal = FinalClass then static_error cl "Cannot extend final class." None;
-      verify_cons (cpn, cilist) cfinal cn superctors boxes lems cctors;
+      verify_cons (cpn, cilist) cfinal cn csuper superctors boxes lems cctors;
       verify_meths (cpn, cilist) cfinal cabstract boxes lems cmeths;
       verify_classes boxes lems classm
   
@@ -2839,7 +2869,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         inductivemap1, purefuncmap1,predctormap1, malloc_block_pred_map1, 
         field_pred_map1, predfammap1, predinstmap1, typedefmap1, functypemap1, 
         funcmap1, boxmap,classmap1,interfmap1,classterms1,interfaceterms1, 
-        pluginmap1
+        pluginmap1, abstract_types_map1
       )
     )
   

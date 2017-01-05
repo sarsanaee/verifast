@@ -373,17 +373,24 @@ and translate_staticness stat =
   | GEN.Static -> VF.Static
   | GEN.NonStatic -> VF.Instance
 
+and next_body_rank =
+  let counter = ref 0 in
+  fun () -> incr counter; !counter
+
 and translate_block l stmts =
   let l'= translate_location l in
   match stmts with
     Some stmts -> 
       begin
         let stmt' = translate_statements_as_block l' stmts in
-        match stmt' with
-        | VF.BlockStmt(l1, ds, VF.SuperConstructorCall(l2, exprs)::stms'', l3, _) -> 
-          Some ([VF.SuperConstructorCall(l2, exprs); 
-               VF.BlockStmt(l1, ds, stms'', l3, ref [])], l')
-        | _ -> Some ([stmt'], l')
+        let stmts' =
+          match stmt' with
+          | VF.BlockStmt(l1, ds, VF.SuperConstructorCall(l2, exprs)::stms'', l3, _) -> 
+            [VF.SuperConstructorCall(l2, exprs); 
+             VF.BlockStmt(l1, ds, stms'', l3, ref [])]
+          | _ -> [stmt']
+        in 
+        Some ((stmts', l'), next_body_rank ())
       end
   | None -> None
 
@@ -441,7 +448,6 @@ and check_contract l anns throws generate =
       anns
   in
   let (pre', post', terminates') = parse_contract l' anns' false in
-  if terminates' then error l' "'terminates' clauses are not yet supported.";
   let throws' = 
     List.map 
       (fun (t, c) -> 
@@ -459,7 +465,7 @@ and check_contract l anns throws generate =
       )      
     throws
   in
-  Some(pre', post', throws')
+  Some(pre', post', throws', terminates')
 
 and translate_methods cn decls = 
   debug_print "translate_methods";
@@ -626,7 +632,7 @@ and add_casts_in_method_call arg_types exprs l =
       let t = translate_type t in
       let e' =
         let l_e = expr_loc e in
-        CastExpr(l_e, false, t, e)
+        CastExpr(l_e, t, e)
       in
       e'::(iter(exprs, arg_types))
     | ([], []) -> []
@@ -852,7 +858,7 @@ and translate_expression expr =
       let l' = translate_location l in
       let typ' = translate_type typ in
       let expr' = translate_expression expr in
-      VF.CastExpr(l', false, typ', expr')
+      VF.CastExpr(l', typ', expr')
   | GEN.Literal(l, typ, value) ->
       translate_literal l typ value 
   | GEN.ArrayAccess(l, expr1, expr2) ->
@@ -886,15 +892,15 @@ and translate_bin_operator op l =
 
 and translate_uni_operator op l expr =
   debug_print "uni_operator";
-  let unit_big_int = VF.IntLit(l, Big_int.big_int_of_int (1)) in
+  let intlit n = VF.IntLit(l, Big_int.big_int_of_int n, true, false, NoLSuffix) in
   match op with
   | GEN.O_Not     -> VF.Operation(l, VF.Eq, [VF.False(l); expr])
   | GEN.O_Pos     -> expr
-  | GEN.O_Neg     -> VF.Operation(l, VF.Mul, [VF.IntLit(l, Big_int.big_int_of_int (-1)); expr])
-  | GEN.O_PreInc  -> VF.AssignOpExpr(l, expr, Add, unit_big_int, false)
-  | GEN.O_PreDec  -> VF.AssignOpExpr(l, expr, Sub, unit_big_int, false)
-  | GEN.O_PostInc -> VF.AssignOpExpr(l, expr, Add, unit_big_int, true)
-  | GEN.O_PostDec -> VF.AssignOpExpr(l, expr, Sub, unit_big_int, true)
+  | GEN.O_Neg     -> VF.Operation(l, VF.Sub, [intlit 0; expr])
+  | GEN.O_PreInc  -> VF.AssignOpExpr(l, expr, Add, intlit 1, false)
+  | GEN.O_PreDec  -> VF.AssignOpExpr(l, expr, Sub, intlit 1, false)
+  | GEN.O_PostInc -> VF.AssignOpExpr(l, expr, Add, intlit 1, true)
+  | GEN.O_PostDec -> VF.AssignOpExpr(l, expr, Sub, intlit 1, true)
   | GEN.O_Compl   -> VF.Operation(l, VF.BitNot, [expr])
 
 and translate_literal l typ value =
@@ -913,19 +919,19 @@ and translate_literal l typ value =
         (* TODO: support all sizes of integers*)
         | GEN.CharType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.ByteType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.ShortType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.IntType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.LongType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, LSuffix)
         | GEN.FloatType(l) ->
             let l' = translate_location l in
             error l' "floats not supported yet"

@@ -4,5 +4,6 @@ let _ =
     (
       fun client ->
         let ctxt = (new Z3v4dot5prover.z3_context() : Z3v4dot5prover.z3_context :> (Z3native.sort, Z3native.func_decl, Z3native.ast) Proverapi.context) in
-        client#run ctxt
+        let termnode_to_string tn = ctxt#pprint tn in
+        client#run ctxt termnode_to_string
     )

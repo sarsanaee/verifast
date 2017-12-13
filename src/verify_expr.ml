@@ -167,7 +167,6 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       check_breakpoint h env l;
       check_exportpoint l;
       major_success ()
-      SymExecSuccess
     | _ ->
     with_context (Executing (h, env, l, "Cleaning up dummy fraction chunks")) $. fun () ->
     let h = List.filter (fun (Chunk (_, _, coef, _, _)) -> not (is_dummy_frac_term coef)) h in
@@ -177,7 +176,6 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     check_breakpoint [] env l;
     check_exportpoint l;
     major_success ()
-    SymExecSuccess
   
   let check_func_header_compat l msg0 msg env00 (k, tparams, rt, xmap, nonghost_callers_only, pre, post, epost, terminates) (k0, tparams0, rt0, xmap0, nonghost_callers_only0, tpenv0, cenv0, pre0, post0, epost0, terminates0) =
     let msg1 = msg in

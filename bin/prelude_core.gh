@@ -3,7 +3,7 @@
 
 fixpoint t default_value<t>();
 
-lemma void default_value_eq_zero();
+lemma_auto void default_value_eq_zero();
     requires true;
     ensures default_value<int> == 0;
 

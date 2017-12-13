@@ -5031,11 +5031,10 @@ let check_if_list_is_defined () =
     !stats#proverOtherQuery;
     if not (ctxt#query t) then
       begin
-        assert_false h env l msg url
         if tolerate_errors then
           printf "Tolerated symbolic execution error: %s  %s\n" msg (ctxt#pprint t)
         else
-          raise (SymbolicExecutionError (pprint_context_stack !contextStack, ctxt#pprint t, l, msg, url));
+          assert_false h env l msg url
       end
 
   let rec prover_type_term l tp = 

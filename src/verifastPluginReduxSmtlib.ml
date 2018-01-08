@@ -4,6 +4,7 @@ module S = Smtlib
 module P = Proverapi
 module C = Combineprovers
 
+(* Disabled for now, can't figure out how to put a print term function --Solal
 let _ =
   Verifast.register_prover "Redux+SMTLib"
     "(experimental) run Redux and dump the session to a file in SMTLib format."
@@ -20,3 +21,4 @@ let _ =
       in
       client#run (C.combine redux_ctxt smtlib_ctxt C.Sync)
     )
+*)

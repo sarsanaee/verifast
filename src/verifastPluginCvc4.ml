@@ -12,5 +12,6 @@ let _ =
           "cvc4 --incremental --lang smt"
           ["cvc4"; "I"; "Q"; "NDT"; "LIA"; "LRA"]
       in
-      client#run cvc4_ctxt
+      let termnode_to_string tn = cvc4_ctxt#pprint tn in
+      client#run cvc4_ctxt termnode_to_string
     )

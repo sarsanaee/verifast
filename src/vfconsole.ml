@@ -35,7 +35,7 @@ let _ =
   let print_msg l msg =
     print_endline (string_of_loc l ^ ": " ^ msg)
   in
-  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string option) (path : string)
+  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string) (path : string)
       (breakpoint_lino : int option) (context_export_file : string option) (export_lino : int option) (emitHighlightedSourceFiles : bool) =
     let verify range_callback =
     let exit l =

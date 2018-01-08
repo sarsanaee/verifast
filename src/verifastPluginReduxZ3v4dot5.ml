@@ -4,6 +4,7 @@ module Zn = Z3native
 module C = Combineprovers
 module P = Proverapi
 
+(* Disabled for now, can't figure out how to write a print term function --Solal
 let _ =
   Verifast.register_prover "Redux+Z3v4.5"
     "(experimental) run Redux and Z3v4.5 in sequence."
@@ -19,3 +20,4 @@ let _ =
       in
       client#run (C.combine redux_ctxt z3_ctxt C.Sequence)
     )
+*)

@@ -5,6 +5,7 @@ module S = Smtlib
 module P = Proverapi
 module C = Combineprovers
 
+(* Disabled for now, can't figure out how to write a print term function --Solal
 let _ =
   Verifast.register_prover "Z3v4.5+SMTLib"
     "(experimental) run Z3 version 4.5 and dump the session to a file in SMTLib format."
@@ -21,3 +22,4 @@ let _ =
       in
       client#run (C.combine z3_ctxt smtlib_ctxt C.Sync)
     )
+*)

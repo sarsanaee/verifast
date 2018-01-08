@@ -12,5 +12,6 @@ let _ =
           "z3 -in -smt2 smt.auto_config=false smt.mbqi=false auto_config=false model=false type_check=true well_sorted_check=true"
           ["z3"; "I"; "Q"; "NDT"; "LIA"; "LRA"]
       in
-      client#run z3_ctxt
+      let termnode_to_string tn = z3_ctxt#pprint tn in
+      client#run z3_ctxt termnode_to_string
     )

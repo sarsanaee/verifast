@@ -18,8 +18,8 @@ void sender(int recvr, char *key, int key_len, char *msg)
   /*@ requires [_]public_invar(sign_pub) &*&
                principal(?sender, _) &*&
                [?f1]cryptogram(key, key_len, ?key_ccs, ?key_cg) &*&
-                 key_cg == cg_private_key(sender, ?id) &*&
-                 key_len >= 384 &*& key_len < MAX_KEY_SIZE &*&
+                 key_cg == cg_rsa_private_key(sender, ?id) &*&
+                 key_len >= 512 &*& key_len < MAX_KEY_SIZE &*&
                [?f2]chars(msg, MSG_SIZE, ?msg_cs) &*&
                true == send(sender, recvr, msg_cs); @*/
   /*@ ensures  principal(sender, _) &*&
@@ -28,7 +28,7 @@ void sender(int recvr, char *key, int key_len, char *msg)
 {
   //@ open principal(sender, _);
   int socket;
-  char hash[48];
+  char hash[64];
   pk_context context;
   havege_state havege_state;
 
@@ -48,11 +48,13 @@ void sender(int recvr, char *key, int key_len, char *msg)
     //@ assert integer(&recvr, ?receiver);
     //@ integer_to_chars(&recvr);
     //@ chars_to_crypto_chars((void*) &recvr, 4);
+    //@ chars_to_crypto_chars(M, 4);
     memcpy(M, &recvr, 4);
     //@ cs_to_ccs_crypto_chars((void*) &recvr, chars_of_int(receiver));
     //@ chars_to_integer(&recvr);
     
     //@ chars_to_crypto_chars(msg, MSG_SIZE);
+    //@ chars_to_crypto_chars(M + 4, MSG_SIZE);
     memcpy(M + 4, msg, (unsigned int) MSG_SIZE);
     //@ crypto_chars_join(M);
     //@ list<char> pay = append(chars_of_int(receiver), msg_cs);
@@ -63,14 +65,14 @@ void sender(int recvr, char *key, int key_len, char *msg)
     // create hash of plain text
     //@ assert chars(M, 4 + MSG_SIZE, pay);
     //@ chars_to_crypto_chars(M, 4 + MSG_SIZE);
-    //@ HASH_PUB_PAYLOAD(pay)
-    sha512(M, (unsigned int) (4 + MSG_SIZE), hash, 1);
-    //@ open cryptogram(hash, 48, ?hash_cs, ?hash_cg);
-    //@ close cryptogram(hash, 48, hash_cs, hash_cg);
+    //@ MEMCMP_PUB(M)
+    sha512(M, (unsigned int) (4 + MSG_SIZE), hash, 0);
+    //@ open cryptogram(hash, 64, ?hash_cs, ?hash_cg);
+    //@ close cryptogram(hash, 64, hash_cs, hash_cg);
     //@ close sign_pub(hash_cg);
     //@ leak sign_pub(hash_cg);
     //@ public_cryptogram(hash, hash_cg);
-    //@ chars_to_crypto_chars(hash, 48);
+    //@ chars_to_crypto_chars(hash, 64);
 
     // create signature
     //@ close pk_context(&context);
@@ -82,7 +84,7 @@ void sender(int recvr, char *key, int key_len, char *msg)
     //@ close random_state_predicate(havege_state_initialized);
     /*@ produce_function_pointer_chunk random_function(random_stub_sign)
                      (havege_state_initialized)(state, out, len) { call(); } @*/
-    if (pk_sign(&context, POLARSSL_MD_NONE, hash, 48, M + 4 + MSG_SIZE,
+    if (pk_sign(&context, MBEDTLS_MD_NONE, hash, 64, M + 4 + MSG_SIZE,
                 &sign_len, random_stub_sign, &havege_state) != 0)
       abort();
     //@ pk_release_context_with_key(&context);
@@ -91,11 +93,11 @@ void sender(int recvr, char *key, int key_len, char *msg)
     havege_free(&havege_state);
     //@ open havege_state(&havege_state);
     //@ assert u_integer(&sign_len, ?sign_len_val);
-    //@ crypto_chars_to_chars(hash, 48);
+    //@ crypto_chars_to_chars(hash, 64);
     //@ open cryptogram(M + 4 + MSG_SIZE, sign_len_val, ?cs_sign, ?cg_sign);
     //@ close cryptogram(M + 4 + MSG_SIZE, sign_len_val, cs_sign, cg_sign);
     //@ assert chars(M + 4 + MSG_SIZE + sign_len_val, key_len - sign_len_val, _);
-    //@ assert cg_sign == cg_asym_signature(sender, id, hash_cs, _);
+    //@ assert cg_sign == cg_rsa_signature(sender, id, hash_cs, _);
     //@ if (!col && !bad(sender)) close sign_pub_1(msg_cs, recvr);
     
     //@ close sign_pub(cg_sign);
@@ -116,7 +118,7 @@ void receiver(int recvr, char *key, int key_len, char *msg)
   /*@ requires [_]public_invar(sign_pub) &*&
                principal(recvr, _) &*&
                [?f1]cryptogram(key, key_len, ?key_ccs, ?key_cg) &*&
-                 key_cg == cg_public_key(?sender, ?id) &*&
+                 key_cg == cg_rsa_public_key(?sender, ?id) &*&
                  key_len <= MAX_KEY_SIZE &*&
                chars(msg, MSG_SIZE, _); @*/
   /*@ ensures  principal(recvr, _) &*&
@@ -139,12 +141,12 @@ void receiver(int recvr, char *key, int key_len, char *msg)
   {
     pk_context context;
     int max_size = 4 + MSG_SIZE + MAX_KEY_SIZE;
-    char hash[48];
+    char hash[64];
     int* temp;
     char *buffer = malloc (max_size); if (buffer == 0) abort();
     int size = net_recv(&socket2, buffer, (unsigned int) max_size);
     if (size <= 4 + MSG_SIZE) abort();
-    if (48 * 8 > key_len) abort();
+    if (64 * 8 > key_len) abort();
 
     //@ chars_split(buffer, size);
     //@ assert chars(buffer, size, ?all_cs);
@@ -161,6 +163,7 @@ void receiver(int recvr, char *key, int key_len, char *msg)
     //@ chars_split(buffer + 4, MSG_SIZE);
     //@ assert chars(buffer + 4, MSG_SIZE, ?msg_cs);
     //@ chars_to_crypto_chars(buffer + 4, MSG_SIZE);
+    //@ chars_to_crypto_chars(msg, MSG_SIZE);
     memcpy(msg, buffer + 4, MSG_SIZE);
     //@ cs_to_ccs_crypto_chars(msg, msg_cs);
     //@ cs_to_ccs_crypto_chars(buffer + 4, msg_cs);
@@ -172,9 +175,9 @@ void receiver(int recvr, char *key, int key_len, char *msg)
     //@ assert chars(buffer, 4 + MSG_SIZE, ?pay);
     //@ chars_to_crypto_chars(buffer, 4 + MSG_SIZE);
     //@ assert pay == append(chars_of_int(receiver), msg_cs);
-    //@ HASH_PUB_PAYLOAD(pay)
-    sha512(buffer, (unsigned int) (4 + MSG_SIZE), hash, 1);
-    //@ open cryptogram(hash, 48, ?hash_cs, ?hash_cg);
+    //@ MEMCMP_PUB(buffer)
+    sha512(buffer, (unsigned int) (4 + MSG_SIZE), hash, 0);
+    //@ open cryptogram(hash, 64, ?hash_cs, ?hash_cg);
     //@ close sign_pub(hash_cg);
     //@ leak sign_pub(hash_cg);
 
@@ -185,14 +188,14 @@ void receiver(int recvr, char *key, int key_len, char *msg)
       abort();
     //@ assert chars(buffer + 4 + MSG_SIZE, sign_size, sign_cs);
     //@ interpret_asym_signature(buffer + 4 + MSG_SIZE, sign_size);
-    if (pk_verify(&context, POLARSSL_MD_NONE, hash, 48,
+    if (pk_verify(&context, MBEDTLS_MD_NONE, hash, 64,
                   buffer + 4 + MSG_SIZE, (unsigned int) sign_size) != 0)
       abort();
     //@ open cryptogram(buffer + 4 + MSG_SIZE, sign_size, ?sign_ccs, ?sign_cg);
     //@ pk_release_context_with_key(&context);
     pk_free(&context);
     //@ open pk_context(&context);
-    //@ close cryptogram(hash, 48, hash_cs, hash_cg);
+    //@ close cryptogram(hash, 64, hash_cs, hash_cg);
     //@ public_cryptogram(hash, hash_cg);
     
     //@ public_crypto_chars(buffer + 4 + MSG_SIZE, sign_size);
@@ -204,7 +207,7 @@ void receiver(int recvr, char *key, int key_len, char *msg)
           open [_]sign_pub(sign_cg);
           assert [_]sign_pub_1(?msg_cs2, ?receiver2);
           cryptogram hash_cg2 = 
-            cg_hash(cs_to_ccs(append(chars_of_int(receiver2), msg_cs2)));
+            cg_sha512_hash(cs_to_ccs(append(chars_of_int(receiver2), msg_cs2)));
           ccs_for_cg_inj(hash_cg, hash_cg2);
           cs_to_ccs_inj(append(chars_of_int(receiver), msg_cs),
                         append(chars_of_int(receiver2), msg_cs2));

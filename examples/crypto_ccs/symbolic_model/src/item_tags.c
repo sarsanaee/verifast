@@ -99,17 +99,15 @@ void check_tag(char* buffer, char tag)
 void check_tag2(char* buffer, char tag)
   /*@ requires [_]public_invar(?pub) &*&
                [_]decryption_key_classifier(?key_classifier) &*&
-               network_permission(?p) &*&
                [?f2]crypto_chars(normal, buffer, TAG_LENGTH, ?ccs) &*&
-               check_tag2_args(?sym, ?garbage, ?p_key, ?c_key, ?rest_ccs) &*&
+               check_tag2_args(?sym, ?garbage, ?p, ?p_key, ?c_key, ?rest_ccs) &*&
                garbage ?
                  decryption_garbage(sym, p, ?s, p_key, c_key,
                                     append(ccs, rest_ccs)) &*&
                  s == known_value(0, full_ctag(c_to_cc(tag)))
                :
                  true; @*/
-  /*@ ensures  network_permission(p) &*&
-               [f2]crypto_chars(normal, buffer, TAG_LENGTH, ccs) &*&
+  /*@ ensures  [f2]crypto_chars(normal, buffer, TAG_LENGTH, ccs) &*&
                head(ccs) == c_to_cc(tag) &*& ccs == full_ctag(head(ccs)) &*&
                garbage ?
                  decryption_permission(p) &*&
@@ -117,13 +115,14 @@ void check_tag2(char* buffer, char tag)
                :
                  true; @*/
 {
-  //@ open check_tag2_args(sym, garbage, p_key, c_key, rest_ccs);
+  //@ open check_tag2_args(sym, garbage, p, p_key, c_key, rest_ccs);
   char tb[TAG_LENGTH];
   write_tag(tb, tag);
   //@ public_chars(tb, TAG_LENGTH);
   //@ chars_to_crypto_chars(tb, TAG_LENGTH);
   //@ cs_to_ccs_full_tag(tag);
-  //@ assert crypto_chars(normal, tb, TAG_LENGTH, full_ctag(c_to_cc(tag)));
+  //@ MEMCMP_PUB(tb)
+  //@ MEMCMP_PUB(buffer)
   if (memcmp(buffer, tb, TAG_LENGTH) != 0)
     abort_crypto_lib("Checking tag failed");
   //@ assert [f2]crypto_chars(?kind2, buffer, TAG_LENGTH, ccs);

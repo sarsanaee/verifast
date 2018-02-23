@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "../../annotated_api/polarssl_definitions/polarssl_definitions.h"
+#include "../../annotated_api/mbedTLS_definitions.h"
 //@ #include "proof_obligations.gh"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -105,17 +105,17 @@ fixpoint int info_for_item(item i)
     case symmetric_key_item(p0, c0):
       return cg_info(cg_symmetric_key(p0, c0));
     case public_key_item(p0, c0):
-      return cg_info(cg_public_key(p0, c0));
+      return cg_info(cg_rsa_public_key(p0, c0));
     case private_key_item(p0, c0):
-      return cg_info(cg_private_key(p0, c0));
+      return cg_info(cg_rsa_private_key(p0, c0));
     case hmac_item(p0, c0, pay0):
       return cg_info(cg_symmetric_key(p0, c0));
     case symmetric_encrypted_item(p0, c0, pay0, ent0):
       return cg_info(cg_symmetric_key(p0, c0));
     case asymmetric_encrypted_item(p0, c0, pay0, ent0):
-      return cg_info(cg_public_key(p0, c0));
+      return cg_info(cg_rsa_public_key(p0, c0));
     case asymmetric_signature_item(p0, c0, pay0, ent0):
-      return cg_info(cg_private_key(p0, c0));
+      return cg_info(cg_rsa_private_key(p0, c0));
   }
 }
 
@@ -342,32 +342,6 @@ unsigned int random_u_int();
 // Hash item //////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-/*@
-fixpoint bool item_with_entropy(item i)
-{
-  switch(i)
-  {
-    case data_item(cs0):
-      return false;
-    case hash_item(pay0):
-      return false;
-    case hmac_item(p0, c0, pay0):
-      return false;
-    case pair_item(f0, s0):
-      return item_with_entropy(f0) || item_with_entropy(s0);
-    default:
-      return true;
-  }
-}
-
-predicate hash_item_payload(predicate(item) pub, bool public, item pay) =
-  public ?
-    [_]pub(pay)
-  :
-    item_with_entropy(pay) ? true : pay == data_item(_)
-;
-@*/
-
 bool is_hash(struct item *item);
   //@ requires [?f]world(?pub, ?key_clsfy) &*& item(item, ?i, pub);
   /*@ ensures  [f]world(pub, key_clsfy) &*& item(item, i, pub) &*&
@@ -380,8 +354,7 @@ void check_is_hash(struct item *item);
 
 struct item *create_hash(struct item *payload);
   /*@ requires [?f0]world(?pub, ?key_clsfy) &*&
-               [?f1]item(payload, ?pay, pub) &*&
-               [_]hash_item_payload(pub, _, pay); @*/
+               [?f1]item(payload, ?pay, pub); @*/
   /*@ ensures  [f0]world(pub, key_clsfy) &*&
                [f1]item(payload, pay, pub) &*& item(result, ?hash, pub) &*&
                col || hash == hash_item(some(pay)); @*/
@@ -502,7 +475,6 @@ void check_is_hmac(struct item *item);
 struct item *create_hmac(struct item *key, struct item *payload);
   /*@ requires [?f0]world(?pub, ?key_clsfy) &*&
                [?f1]item(payload, ?pay, pub) &*&
-                 [_]hash_item_payload(pub, _, pay) &*&
                [?f2]item(key, ?k, pub) &*&
                  k == symmetric_key_item(?creator, ?id); @*/
   /*@ ensures  [f0]world(pub, key_clsfy) &*&
@@ -800,18 +772,15 @@ void network_disconnect(struct network_status *stat);
   //@ ensures  true;
 
 void network_send(struct network_status *stat, struct item *datagram);
-  /*@ requires [?f]world(?pub, ?key_clsfy) &*& principal(?id, ?count) &*&
-               network_status(stat) &*&
+  /*@ requires [?f]world(?pub, ?key_clsfy) &*& network_status(stat) &*&
                item(datagram, ?d, pub) &*& [_]pub(d); @*/
-  /*@ ensures  [f]world(pub, key_clsfy) &*& principal(id, count) &*&
+  /*@ ensures  [f]world(pub, key_clsfy) &*&
                network_status(stat) &*&
                item(datagram, d, pub); @*/
 
 struct item *network_receive(struct network_status *stat);
-  /*@ requires [?f]world(?pub, ?key_clsfy) &*& principal(?id, ?count) &*&
-               network_status(stat); @*/
-  /*@ ensures  [f]world(pub, key_clsfy) &*& principal(id, count) &*&
-               network_status(stat) &*&
+  /*@ requires [?f]world(?pub, ?key_clsfy) &*& network_status(stat); @*/
+  /*@ ensures  [f]world(pub, key_clsfy) &*& network_status(stat) &*&
                item(result, ?d, pub) &*& [_]pub(d); @*/
 
 ///////////////////////////////////////////////////////////////////////////////

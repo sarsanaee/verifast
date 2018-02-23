@@ -105,14 +105,13 @@ let rec sexpr_of_type_ (t : type_) : sexpression =
                                         Symbol s ]
     | RefType (t)             -> List [ Symbol "type-ref-type";
                                         sexpr_of_type_ t ]
-    | PluginInternalType v    -> aux2 "type-plugin-internal-type"
     | AbstractType (s)         -> List [ Symbol "type-abstract";
                                         Symbol s ]
 
 let rec sexpr_of_type_expr : type_expr -> sexpression = function
-  | StructTypeExpr (_, name)  -> 
+  | StructTypeExpr (_, name, _)  -> 
     List [ Symbol "type-expr-struct"
-         ; Symbol name ]
+         ; sexpr_of_option (fun s -> Symbol s) name ]
   | PtrTypeExpr (_, te) -> 
     List [ Symbol "type-expr-pointer-to"
          ; sexpr_of_type_expr te ]
@@ -332,7 +331,7 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
                  [ "cond", sexpr_of_expr c
                  ; "e1", sexpr_of_expr e1
                  ; "e2", sexpr_of_expr e2 ]
-    | SwitchExpr (_, cond, clauses, default, _) ->
+    | SwitchExpr (_, cond, clauses, default) ->
       build_list [ Symbol "expr-switch" ]
                  [ "cond", sexpr_of_expr cond
                  ; "clauses", sexpr_of_list sexpr_of_switch_clause clauses

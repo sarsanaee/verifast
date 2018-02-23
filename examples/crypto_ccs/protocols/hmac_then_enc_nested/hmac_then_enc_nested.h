@@ -1,7 +1,7 @@
 #ifndef HMAC_THEN_ENC_NESTED_H
 #define HMAC_THEN_ENC_NESTED_H
 
-#include "../../annotated_api/polarssl_definitions/polarssl_definitions.h"
+#include "../../annotated_api/mbedTLS_definitions.h"
 
 #define MAX_SIZE 1024
 #define KEY_SIZE 32
@@ -42,38 +42,38 @@ predicate hmac_then_enc_nested_pub(cryptogram cg) =
       return true;
     case cg_symmetric_key(p0, c0):
       return true == hmac_then_enc_nested_public_key(p0, c0, true);
-    case cg_public_key(p0, c0):
+    case cg_rsa_public_key(p0, c0):
       return true;
-    case cg_private_key(p0, c0):
+    case cg_rsa_private_key(p0, c0):
       return true == hmac_then_enc_nested_public_key(p0, c0, false);
-    case cg_hash(ccs0):
+    case cg_sha512_hash(ccs0):
       return true;
-    case cg_hmac(p0, c0, ccs0):
+    case cg_sha512_hmac(p0, c0, ccs0):
       return true;
-    case cg_encrypted(p0, c0, ccs0, ent0):
+    case cg_aes_encrypted(p0, c0, ccs0, ent0):
       return hmac_then_enc_nested_public_key(p0, c0, true) ?
         [_]public_ccs(ccs0)
       :
         hmac_then_enc_nested_pub_1(?enc_cg, ?msg_ccs, ?hmac_cg) &*&
         ccs0 == ccs_for_cg(enc_cg) &*&
-        enc_cg == cg_encrypted(p0, ?c1, ?cs1, _) &*&
+        enc_cg == cg_aes_encrypted(p0, ?c1, ?cs1, _) &*&
         true == cg_is_gen_or_pub(enc_cg) &*&
         cs1 == append(msg_ccs, ccs_for_cg(hmac_cg)) &*&
         true == cg_is_gen_or_pub(hmac_cg) &*&
         length(ccs_for_cg(hmac_cg)) == 64 &*&
-        hmac_cg == cg_hmac(p0, ?c2, msg_ccs) &*&
+        hmac_cg == cg_sha512_hmac(p0, ?c2, msg_ccs) &*&
         cg_info(cg_symmetric_key(p0, c0)) == c2 &*&
         cg_info(cg_symmetric_key(p0, c1)) == c2 &*&
         shared_with(p0, c0) == shared_with(p0, c1) &*&
         shared_with(p0, c0) == shared_with(p0, c2) &*&
-        [_]hash_payload(_, msg_ccs) &*&
+        [_]memcmp_region(_, msg_ccs) &*&
         true == send(p0, shared_with(p0, c0), msg_ccs);
-    case cg_auth_encrypted(p0, c0, ccs0, ent0):
+    case cg_aes_auth_encrypted(p0, c0, ccs0, ent0):
       return true == hmac_then_enc_nested_public_key(p0, c0, true) &*&
              [_]public_ccs(ccs0);
-    case cg_asym_encrypted(p0, c0, ccs0, ent0):
+    case cg_rsa_encrypted(p0, c0, ccs0, ent0):
       return [_]public_ccs(ccs0);
-    case cg_asym_signature(p0, c0, ccs0, ent0):
+    case cg_rsa_signature(p0, c0, ccs0, ent0):
       return true == hmac_then_enc_nested_public_key(p0, c0, false);
   }
 ;
@@ -103,7 +103,7 @@ void sender(char *enc_key1, char *enc_key2, char *hmac_key,
                bad(sender) || bad(shared_with(sender, enc_id1)) ?
                  [_]public_ccs(msg_ccs)
                :
-                 [_]hash_payload(_, msg_ccs) &*&
+                 [_]memcmp_region(_, msg_ccs) &*&
                  true == send(sender, shared_with(sender, enc_id1), msg_ccs); @*/
 /*@ ensures  principal(sender, _) &*&
              [f1]cryptogram(enc_key1, KEY_SIZE, enc_key_ccs1, enc_key_cg1) &*&

@@ -2,14 +2,15 @@
 #define STRING_H
 
 #include <stddef.h>
-//@ #include <crypto.gh>
+
+//@ #include "crypto/memcmp.gh"
 
 char *strcpy(char *d, char *s);
     //@ requires [?f]string(s, ?cs) &*& chars(d, length(cs) + 1, _);
     //@ ensures [f]string(s, cs) &*& chars(d, length(cs) + 1, append(cs, {0})) &*& result == d;
 
 void memcpy(void *array, void *array0, size_t count);
-    /*@ requires chars(array, count, _) &*&
+    /*@ requires crypto_chars(_, array, count, _) &*&
                  [?f]crypto_chars(?kind, array0, count, ?ccs0); @*/
     /*@ ensures  crypto_chars(kind, array, count, ccs0) &*&
                  [f]crypto_chars(kind, array0, count, ccs0); @*/
@@ -36,34 +37,19 @@ int strlen(char *string);
     //@ requires [?f]string(string, ?cs);
     //@ ensures [f]string(string, cs) &*& result == length(cs);
 
-/*@
-predicate memcmp_secret(char* buffer, int count, list<crypto_char> ccs, cryptogram cg) =
-  count == length(ccs) && ccs == ccs_for_cg(cg) && cg_is_gen_or_pub(cg) 
-;
-@*/
-
 int memcmp(char *array, char *array0, size_t count);
-    /*@ requires network_permission(?principal) &*& 
-                 [?f1]crypto_chars(?kind1, array, ?n1, ?ccs1) &*&
-                   (kind1 == normal ? true : 
-                      memcmp_secret(array, count, ccs1, _)) &*&
+    /*@ requires [?f1]crypto_chars(?kind1, array, ?n1, ?ccs1) &*&
+                 [_]memcmp_region(?l1, take(count, ccs1)) &*& 
                  [?f2]crypto_chars(?kind2, array0, ?n2, ?ccs2) &*& 
-                   (kind2 == normal ? true : 
-                      memcmp_secret(array0, count, ccs2, _)) &*&
-                 count <= n1 &*& count <= n2; @*/
+                 [_]memcmp_region(?l2, take(count, ccs2)) &*& 
+                 memcmp_match(l1, l2) && count <= n1 && count <= n2; @*/
     /*@ ensures  [f1]crypto_chars(kind1, array, n1, ccs1) &*&
                  [f2]crypto_chars(kind2, array0, n2, ccs2) &*&
-                 true == ((result == 0) == (take(count, ccs1) == take(count, ccs2))) &*&
-                 (
-                   //if guessing a secret value failed, network permissions are revoked
-                   // *otherwise one could keep guessing untill success
-                   result != 0 && (kind1 == secret || kind2 == secret) ?
-                       true : network_permission(principal)
-                 ); @*/
+                 true == ((result == 0) == (take(count, ccs1) == take(count, ccs2))); @*/
 
 int strcmp(char *s1, char *s2);
     //@ requires [?f1]string(s1, ?cs1) &*& [?f2]string(s2, ?cs2);
-    //@ ensures [f1]string(s1, cs1) &*& [f2]string(s2, cs2) &*& true == ((result == 0) == (cs1 == cs2));
+    //@ ensures [f1]string(s1, cs1) &*& [f2]string(s2, cs2) &*& (result == 0) == (cs1 == cs2);
 
 char *memchr(char *array, char c, size_t count);
     //@ requires [?f]chars(array, count, ?cs);

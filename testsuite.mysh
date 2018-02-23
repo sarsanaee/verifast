@@ -8,6 +8,14 @@ cd bin
   cd ..
 cd ..
 cd examples
+  verifast -target IP16 -c -allow_should_fail 16bittest.c
+  verifast -target LP64 -c 64bittest.c
+  cd clhlock
+    verifast -prover redux -c clhlock.c
+  cd ..
+  cd splitcounter
+    verifast -prover redux -c -disable_overflow_check splitcounter.c
+  cd ..
   cd crypto
     mysh -cpus 1 < crypto.mysh
   cd ..
@@ -27,6 +35,7 @@ cd examples
   verifast_both -disable_overflow_check array_of_struct.c
   verifast_both -disable_overflow_check -c arraylist.c
   verifast_both -disable_overflow_check threading.o barrier.c
+  ifz3v4.5 verifast -prover z3v4.5 -c bitops.c
   verifast_both -c static_array.c
   verifast -c -disable_overflow_check typedef_cast.c
   verifast_both -c automation.c
@@ -113,6 +122,9 @@ cd examples
   verifast_both -disable_overflow_check global_points_to_syntax.c
   verifast_both -shared goto.c
   verifast_both -disable_overflow_check -c gui-app.c
+  cd heartbleed
+    verifast_both -c t1_lib.c
+  cd ..
   verifast_both -c icap_mt_event_loop.c
   verifast_both -c ifs.c
   verifast_both threading.o incr.c
@@ -375,6 +387,7 @@ cd tutorial_solutions
   verifast_both students.c
 cd ..
 cd tests
+  verifast_both -c -allow_should_fail -allow_undeclared_struct_types undeclared_structs.c
   verifast_both stresstest-one-plus-one.c
   cd test-includepath
     mysh < runthistest.mysh
@@ -399,6 +412,7 @@ cd tests
   cd errors
     verifast_both -c -allow_should_fail basics.c
     verifast_both -c -allow_should_fail typecheck1.c
+    verifast_both -c -allow_should_fail ghost_assignment.c
     verifast_both -c -allow_should_fail ghost_field.c
     verifast_both -c -allow_should_fail inhabited.c
     verifast_both -c -allow_should_fail lemmafuncptr.c

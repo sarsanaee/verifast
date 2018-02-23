@@ -21,7 +21,7 @@ void sender(char *enc_key, char *hmac_key, char *msg, unsigned int msg_len)
                bad(sender) || bad(shared_with(sender, enc_id)) ?
                  [_]public_ccs(msg_ccs)
                :
-                 [_]hash_payload(_, msg_ccs) &*&
+                 [_]memcmp_region(_, msg_ccs) &*&
                  true == send(sender, shared_with(sender, enc_id), msg_ccs); @*/
 /*@ ensures  principal(sender, _) &*&
              [f1]cryptogram(enc_key, KEY_SIZE, enc_key_ccs, enc_key_cg) &*&
@@ -54,6 +54,7 @@ void sender(char *enc_key, char *hmac_key, char *msg, unsigned int msg_len)
     //@ close random_request(sender, 0, false);
     if (havege_random(&havege_state, iv, 16) != 0) abort();
     //@ open cryptogram(iv, 16, ?iv_ccs, ?iv_cg);
+    //@ chars_to_crypto_chars(message, 16);
     memcpy(message, iv, 16);
     //@ close cryptogram(message, 16, iv_ccs, iv_cg);
     //@ close enc_and_hmac_pub(iv_cg);
@@ -81,7 +82,7 @@ void sender(char *enc_key, char *hmac_key, char *msg, unsigned int msg_len)
     //@ public_cryptogram(message + 16, enc_cg);
     //@ assert chars(message + 16, msg_len, ?enc_cs);
     //@ chars_join(message);
-    //@ assert enc_cg == cg_encrypted(sender, enc_id, msg_ccs, iv_ccs);
+    //@ assert enc_cg == cg_aes_encrypted(sender, enc_id, msg_ccs, iv_ccs);
     //@ assert chars(message, 16 + msg_len, append(iv_cs, enc_cs));
     //@ chars_to_crypto_chars(message, 16 + msg_len);
     //@ cs_to_ccs_append(iv_cs, enc_cs);
@@ -90,15 +91,12 @@ void sender(char *enc_key, char *hmac_key, char *msg, unsigned int msg_len)
     
     // hmac
     /*@ if (bad(sender) || bad(shared_with(sender, enc_id)))
-        {
-          close hash_payload(true, msg_ccs);
-          leak hash_payload(true, msg_ccs);
-        }
+          MEMCMP_CCS(msg_ccs)
     @*/
     sha512_hmac(hmac_key, KEY_SIZE, msg, (unsigned int) (msg_len),
                 message + 16 + (int) msg_len, 0);
     //@ assert cryptogram(message + 16 + msg_len, 64, ?hmac_ccs, ?hmac_cg);
-    //@ assert hmac_cg == cg_hmac(sender, hmac_id, msg_ccs);
+    //@ assert hmac_cg == cg_sha512_hmac(sender, hmac_id, msg_ccs);
     //@ close enc_and_hmac_pub(hmac_cg);
     //@ leak enc_and_hmac_pub(hmac_cg);
     //@ public_cryptogram(message + 16 + msg_len, hmac_cg);
@@ -131,7 +129,7 @@ int receiver(char *enc_key, char *hmac_key, char *msg)
              [f2]cryptogram(hmac_key, KEY_SIZE, hmac_key_ccs, hmac_key_cg) &*&
              chars(msg + result, MAX_SIZE - result, _) &*&
              crypto_chars(secret, msg, result, ?msg_ccs) &*&
-             [_]hash_payload(_, msg_ccs) &*&
+             [_]memcmp_region(_, msg_ccs) &*&
              col || bad(sender) || bad(receiver) ||
                send(sender, receiver , msg_ccs); @*/
 {
@@ -169,6 +167,7 @@ int receiver(char *enc_key, char *hmac_key, char *msg)
     //@ chars_split(buffer, 16);
     //@ assert chars(buffer, 16, ?iv_cs);
     //@ chars_to_crypto_chars(buffer, 16);
+    //@ chars_to_crypto_chars(iv, 16);
     memcpy(iv, buffer, 16);
     //@ cs_to_ccs_crypto_chars(iv, iv_cs);
     //@ interpret_nonce(iv, 16);
@@ -178,12 +177,12 @@ int receiver(char *enc_key, char *hmac_key, char *msg)
     //@ interpret_encrypted(buffer + 16, enc_size);
     //@ open cryptogram(buffer + 16, enc_size, ?enc_ccs, ?enc_cg);
     //@ close cryptogram(buffer + 16, enc_size, enc_ccs, enc_cg);
-    //@ assert enc_cg == cg_encrypted(?p2, ?c2, ?dec_ccs2, ?iv_ccs2);
+    //@ assert enc_cg == cg_aes_encrypted(?p2, ?c2, ?dec_ccs2, ?iv_ccs2);
     
     //@ assert chars(buffer + 16 + enc_size, 64, ?hmac_cs);
     //@ interpret_hmac(buffer + 16 + enc_size, 64);
     //@ open cryptogram(buffer + 16 + enc_size, 64, ?hmac_ccs, ?hmac_cg);
-    //@ assert hmac_cg == cg_hmac(?p3, ?c3, ?hmac_pay);
+    //@ assert hmac_cg == cg_sha512_hmac(?p3, ?c3, ?hmac_pay);
     
     // Decrypt
     //@ close aes_context(&aes_context);
@@ -213,19 +212,17 @@ int receiver(char *enc_key, char *hmac_key, char *msg)
     //@ assert crypto_chars(?kind, msg, size - 80, ?pay_ccs);
     //@ public_ccs(msg, size - 80);
     /*@ if (garbage || col || enc_and_hmac_public_key(sender, enc_id, true))
-        {
-          close hash_payload(true, pay_ccs);
-          leak hash_payload(true, pay_ccs);
-        }
+          MEMCMP_CCS(pay_ccs)
     @*/
     sha512_hmac(hmac_key, KEY_SIZE, msg,
                 (unsigned int) enc_size, hmac, 0);
     //@ open cryptogram(hmac, 64, ?hmac_cs2, ?hmac_cg2);
-    //@ assert hmac_cg2 == cg_hmac(sender, hmac_id, pay_ccs);
+    //@ assert hmac_cg2 == cg_sha512_hmac(sender, hmac_id, pay_ccs);
     //@ public_crypto_chars(buffer + size - 64, 64);
     //@ chars_to_crypto_chars(buffer + size - 64, 64);
-    //@ close memcmp_secret(hmac, 64, hmac_cs2, hmac_cg2);
-    if (memcmp((void*) buffer + size - 64, hmac, 64) != 0) abort();
+    //@ MEMCMP_SEC(hmac, hmac_cg2)
+    //@ MEMCMP_PUB((void*) buffer + size - 64)
+    if (memcmp((void*) buffer + size - 64, hmac, 64) != 0) abort();   
     //@ ccs_for_cg_inj(hmac_cg, hmac_cg2);
     //@ assert col || hmac_cg == hmac_cg2;
     //@ public_crypto_chars(hmac, 64);
@@ -253,7 +250,7 @@ int receiver(char *enc_key, char *hmac_key, char *msg)
         {
           if (!col)
           {
-            assert hmac_cg == cg_hmac(sender, hmac_id, dec_ccs);
+            assert hmac_cg == cg_sha512_hmac(sender, hmac_id, dec_ccs);
             public_chars(buffer + size - 64, 64);
             open [_]enc_and_hmac_pub(enc_cg);
           }

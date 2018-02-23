@@ -41,13 +41,14 @@ void client(char *key, int key_len, char *request, char *response)
 
     *message = '0';
     //@ chars_to_crypto_chars(request, PACKAGE_SIZE);
+    //@ chars_to_crypto_chars(message + 1, PACKAGE_SIZE);
     memcpy(message + 1, request, PACKAGE_SIZE);
     //@ list<char> t_req_cs = cons('0', req_cs);
     //@ cs_to_ccs_crypto_chars(request, req_cs);
     //@ cs_to_ccs_crypto_chars(message + 1, req_cs);
     //@ assert chars(message, PACKAGE_SIZE + 1, t_req_cs);
     //@ chars_to_crypto_chars(message, PACKAGE_SIZE + 1);
-    //@ HASH_PUB_PAYLOAD(t_req_cs)
+    //@ MEMCMP_PUB(message)
     sha512_hmac(key, (unsigned int) key_len, message,
                 (unsigned int) PACKAGE_SIZE + 1, hmac, 0);
     //@ assert cryptogram(hmac, 64, ?hmac_ccs, ?hmac_cg);
@@ -57,6 +58,7 @@ void client(char *key, int key_len, char *request, char *response)
     //@ public_cryptogram(hmac, hmac_cg);
     //@ assert chars(hmac, 64, ?hmac_cs);
     //@ chars_to_crypto_chars(hmac, 64);
+    //@ chars_to_crypto_chars(message + PACKAGE_SIZE + 1, 64);
     memcpy(message + PACKAGE_SIZE + 1, hmac, 64);
     //@ cs_to_ccs_crypto_chars(hmac, hmac_cs);
     //@ cs_to_ccs_crypto_chars(message + 1 + PACKAGE_SIZE, hmac_cs);
@@ -80,22 +82,22 @@ void client(char *key, int key_len, char *request, char *response)
     //Verify the hmac
     //@ assert chars(buffer, 1 + 2 * PACKAGE_SIZE, ?cont_cs);
     //@ chars_to_crypto_chars(buffer, 1 + 2 * PACKAGE_SIZE);
-    //@ HASH_PUB_PAYLOAD(cont_cs)
+    //@ MEMCMP_PUB(buffer)
     sha512_hmac(key, (unsigned int) key_len, buffer,
                 (unsigned int) (1 + 2 * PACKAGE_SIZE), hmac, 0);
     //@ open cryptogram(hmac, 64, ?hmac_ccs, ?hmac_cg);
-    //@ close memcmp_secret(hmac, 64, hmac_ccs, hmac_cg);
-    //@ assert hmac_cg == cg_hmac(creator, id, ?cont_ccs);
+    //@ assert hmac_cg == cg_sha512_hmac(creator, id, ?cont_ccs);
     //@ cs_to_ccs_crypto_chars(buffer, cont_cs);
 
     //@ chars_split((void*) buffer + 1 + 2 * PACKAGE_SIZE, 64);
     //@ assert [1/2]chars((void*) buffer + 1 + 2 * PACKAGE_SIZE, 64, ?hmac_cs);
     //@ public_chars((void*) buffer + 1 + 2 * PACKAGE_SIZE, 64);
     //@ chars_to_crypto_chars((void*) buffer + 1 + 2 * PACKAGE_SIZE, 64);
+    //@ MEMCMP_SEC(hmac, hmac_cg)
+    //@ MEMCMP_PUB((void*) buffer + 1 + 2 * PACKAGE_SIZE)
     if (memcmp((void*) buffer + 1 + 2 * PACKAGE_SIZE, hmac, 64) != 0) abort();
     //@ cs_to_ccs_crypto_chars((void*) buffer + 1 + 2 * PACKAGE_SIZE, hmac_cs);
     //@ public_crypto_chars(hmac, 64);
-    ///@ assert chars(buffer, expected_size, append(cont_cs, hmac_cs));
     //@ chars_split(buffer, 1 + 2 * PACKAGE_SIZE);
     //@ close [1/2]hide_chars(buffer, 1 + 2 * PACKAGE_SIZE, cont_cs);
 
@@ -109,6 +111,8 @@ void client(char *key, int key_len, char *request, char *response)
     //@ assert [f2]chars(request, PACKAGE_SIZE, req_cs);
     //@ chars_to_crypto_chars(request, PACKAGE_SIZE);
     //@ chars_to_crypto_chars((void*) buffer + 1, PACKAGE_SIZE);
+    //@ MEMCMP_PUB(request)
+    //@ MEMCMP_PUB((void*) buffer + 1)
     if (memcmp(request, (void*) buffer + 1, PACKAGE_SIZE) != 0) abort();
     //@ cs_to_ccs_crypto_chars(request, req_cs);
     //@ cs_to_ccs_crypto_chars((void*) buffer + 1, req_cs);
@@ -116,6 +120,7 @@ void client(char *key, int key_len, char *request, char *response)
     //Retrieve the actual response
     //@ assert [1/2]chars((void*) buffer + 1 + PACKAGE_SIZE, PACKAGE_SIZE, ?resp_cs);
     //@ chars_to_crypto_chars((void*) buffer + 1 + PACKAGE_SIZE, PACKAGE_SIZE);
+    //@ chars_to_crypto_chars(response, PACKAGE_SIZE);
     memcpy(response, (void*) buffer + 1 + PACKAGE_SIZE, PACKAGE_SIZE);
     //@ cs_to_ccs_crypto_chars(response, resp_cs);
     //@ cs_to_ccs_crypto_chars((void*) buffer + 1 + PACKAGE_SIZE, resp_cs);
@@ -243,18 +248,19 @@ void server(char *key, int key_len, char *request, char *response)
     //Verify the hmac
     //@ assert chars(buffer, 1 + PACKAGE_SIZE, ?cont_cs);
     //@ chars_to_crypto_chars(buffer, 1 + PACKAGE_SIZE);
-    //@ HASH_PUB_PAYLOAD(cont_cs)
+    //@ MEMCMP_PUB(buffer)
     sha512_hmac(key, (unsigned int) key_len, buffer,
                 (unsigned int) (1 + PACKAGE_SIZE), hmac, 0);
     //@ assert crypto_chars(normal, buffer, 1 + PACKAGE_SIZE, ?cont_ccs);
     //@ cs_to_ccs_crypto_chars(buffer, cont_cs);
     //@ open cryptogram(hmac, 64, ?hmac_ccs, ?hmac_cg);
-    //@ assert hmac_cg == cg_hmac(client, id, cont_ccs);
+    //@ assert hmac_cg == cg_sha512_hmac(client, id, cont_ccs);
 
     //@ public_chars((void*) buffer + 1 + PACKAGE_SIZE, 64);
     //@ assert chars((void*) buffer + 1 + PACKAGE_SIZE, 64, ?hmac_cs);
     //@ chars_to_crypto_chars((void*) buffer + 1 + PACKAGE_SIZE, 64);
-    //@ close memcmp_secret(hmac, 64, hmac_ccs, hmac_cg);
+    //@ MEMCMP_SEC(hmac, hmac_cg)
+    //@ MEMCMP_PUB((void*) buffer + 1 + PACKAGE_SIZE)
     if (memcmp((void*) buffer + 1 + PACKAGE_SIZE, hmac, 64) != 0) abort();
     //@ public_crypto_chars(hmac, 64);
     //@ cs_to_ccs_chars(hmac, hmac_cs);
@@ -270,6 +276,7 @@ void server(char *key, int key_len, char *request, char *response)
     //Retrieve the actual request
     //@ assert chars((void*) buffer + 1, PACKAGE_SIZE, ?req_cs);
     //@ chars_to_crypto_chars((void*) buffer + 1, PACKAGE_SIZE);
+    //@ chars_to_crypto_chars(request, PACKAGE_SIZE);
     memcpy(request, (void*) buffer + 1, PACKAGE_SIZE);
     //@ cs_to_ccs_crypto_chars(request, req_cs);
     
@@ -316,9 +323,11 @@ void server(char *key, int key_len, char *request, char *response)
     //@ chars_to_crypto_chars(message, 1);
     //@ chars_split(message + 1, PACKAGE_SIZE);
     //@ chars_to_crypto_chars(request, PACKAGE_SIZE);
+    //@ chars_to_crypto_chars(message + 1, PACKAGE_SIZE);
     memcpy(message + 1, request, PACKAGE_SIZE);
     //@ cs_to_ccs_crypto_chars(request, req_cs);
     //@ chars_to_crypto_chars(response, PACKAGE_SIZE);
+    //@ chars_to_crypto_chars(message + 1 + PACKAGE_SIZE, PACKAGE_SIZE);
     memcpy(message + 1 + PACKAGE_SIZE, response, PACKAGE_SIZE);
     //@ cs_to_ccs_crypto_chars(response, resp_cs);
     //@ crypto_chars_join(message + 1);
@@ -329,11 +338,12 @@ void server(char *key, int key_len, char *request, char *response)
     
     //@ chars_to_crypto_chars(message, 1 + 2 * PACKAGE_SIZE);
     //@ assert crypto_chars(normal, message, 1 + 2 * PACKAGE_SIZE, ?pay_ccs);
-    //@ HASH_PUB_PAYLOAD(pay_cs)
+    //@ MEMCMP_PUB(message)
     sha512_hmac(key, (unsigned int) key_len, message,
                 (unsigned int) 2 * PACKAGE_SIZE + 1, hmac, 0);
     //@ open cryptogram(hmac, 64, ?hmac_ccs, ?hmac_cg);
-    //@ assert hmac_cg == cg_hmac(client, id, pay_ccs);
+    //@ assert hmac_cg == cg_sha512_hmac(client, id, pay_ccs);
+    //@ chars_to_crypto_chars(message + 1 + 2 * PACKAGE_SIZE, 64);
     memcpy(message + 1 + 2 * PACKAGE_SIZE, hmac, 64);
     //@ close cryptogram(message + 1 + 2 * PACKAGE_SIZE, 64, hmac_ccs, hmac_cg);
     //@ drop_append(PACKAGE_SIZE, req_cs, resp_cs);

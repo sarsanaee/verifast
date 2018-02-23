@@ -1,7 +1,7 @@
 #ifndef ENC_AND_HMAC_H
 #define ENC_AND_HMAC_H
 
-#include "../../annotated_api/polarssl_definitions/polarssl_definitions.h"
+#include "../../annotated_api/mbedTLS_definitions.h"
 
 #define MAX_SIZE 1024
 #define KEY_SIZE 32
@@ -38,30 +38,30 @@ predicate enc_and_hmac_pub(cryptogram cg) =
       return true;
     case cg_symmetric_key(p0, c0):
       return true == enc_and_hmac_public_key(p0, c0, true);
-    case cg_public_key(p0, c0):
+    case cg_rsa_public_key(p0, c0):
       return true;
-    case cg_private_key(p0, c0):
+    case cg_rsa_private_key(p0, c0):
       return true == enc_and_hmac_public_key(p0, c0, false);
-    case cg_hash(ccs0):
+    case cg_sha512_hash(ccs0):
       return true;
-    case cg_hmac(p0, c0, ccs0):
+    case cg_sha512_hmac(p0, c0, ccs0):
       return enc_and_hmac_public_key(p0, c0, true) ?
         [_]public_ccs(ccs0)
       :
-        [_]hash_payload(_, ccs0) &*&
+        [_]memcmp_region(_, ccs0) &*&
         true == send(p0, shared_with(p0, c0), ccs0);
-    case cg_encrypted(p0, c0, ccs0, ent0):
+    case cg_aes_encrypted(p0, c0, ccs0, ent0):
       return enc_and_hmac_public_key(p0, c0, true) ?
         [_]public_ccs(ccs0)
       :
-        [_]hash_payload(_, ccs0) &*&
+        [_]memcmp_region(_, ccs0) &*&
         true == send(p0, shared_with(p0, c0), ccs0);
-    case cg_auth_encrypted(p0, c0, ccs0, ent0):
+    case cg_aes_auth_encrypted(p0, c0, ccs0, ent0):
       return true == enc_and_hmac_public_key(p0, c0, true) &*&
              [_]public_ccs(ccs0);
-    case cg_asym_encrypted(p0, c0, ccs0, ent0):
+    case cg_rsa_encrypted(p0, c0, ccs0, ent0):
       return [_]public_ccs(ccs0);
-    case cg_asym_signature(p0, c0, ccs0, ent0):
+    case cg_rsa_signature(p0, c0, ccs0, ent0):
       return true == enc_and_hmac_public_key(p0, c0, false);
   }
 ;
@@ -85,7 +85,7 @@ void sender(char *enc_key, char *hmac_key, char *msg, unsigned int msg_len);
                bad(sender) || bad(shared_with(sender, enc_id)) ?
                  [_]public_ccs(msg_ccs)
                :
-                 [_]hash_payload(_, msg_ccs) &*&
+                 [_]memcmp_region(_, msg_ccs) &*&
                  true == send(sender, shared_with(sender, enc_id), msg_ccs); @*/
 /*@ ensures  principal(sender, _) &*&
              [f1]cryptogram(enc_key, KEY_SIZE, enc_key_ccs, enc_key_cg) &*&
@@ -108,7 +108,7 @@ int receiver(char *enc_key, char *hmac_key, char *msg);
              [f2]cryptogram(hmac_key, KEY_SIZE, hmac_key_ccs, hmac_key_cg) &*&
              chars(msg + result, MAX_SIZE - result, _) &*&
              crypto_chars(secret, msg, result, ?msg_ccs) &*&
-             [_]hash_payload(_, msg_ccs) &*&
+             [_]memcmp_region(_, msg_ccs) &*&
              col || bad(sender) || bad(receiver) ||
                send(sender, receiver, msg_ccs); @*/
 

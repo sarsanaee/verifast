@@ -3,12 +3,76 @@
 /*@
 
 lemma void well_formed_item_constraints(item i1, item i2)
-  requires [_]item_constraints(i1, ?cs, ?pub);
-  ensures  [_]well_formed_item_ccs(i2)(cs);
+  requires [_]item_constraints(i1, ?ccs, ?pub);
+  ensures  [_]well_formed_item_ccs(i2)(ccs);
 {
-  open  [_]item_constraints(i1, cs, pub);
-  close well_formed_item_ccs(i2)(cs);
-  leak well_formed_item_ccs(i2)(cs);
+  open  [_]item_constraints(i1, ccs, pub);
+  close well_formed_item_ccs(i2)(ccs);
+  leak well_formed_item_ccs(i2)(ccs);
+}
+
+#define IC_MEMCMP_CG \
+  assert [_]ic_cg(i)(?ccs_cg, ?cg); \
+  list<char> cs_tag = full_tag(tag_for_item(i)); \
+  memcmp_part p_tag = memcmp_pub(cs_tag); \
+  memcmp_part p_cg = memcmp_sec(cg); \
+  MEMCMP_REGION(cons(p_cg, nil), ccs_cg); \
+  
+#define IC_MEMCMP_DEFAULT \
+  IC_MEMCMP_CG \
+  MEMCMP_REGION(cons(p_tag, cons(p_cg, nil)), ccs);
+
+lemma void item_constraints_memcmp(item i)
+  requires [_]item_constraints(i, ?ccs, ?pub);
+  ensures  [_]memcmp_region(_, ccs);
+{
+  OPEN_ITEM_CONSTRAINTS(i, ccs, pub)
+  assert [_]ic_parts(i)(?ccs_tag, ?ccs_cont);
+  if (col) MEMCMP_CCS(ccs) else switch(i)
+  {
+    case data_item(d0):
+      MEMCMP_CCS(ccs)
+    case pair_item(f0, s0):
+      assert [_]ic_pair(i)(?f_ccs, ?s_ccs);
+      assert [_]item_constraints(f0, f_ccs, pub);
+      assert [_]item_constraints(s0, s_ccs, pub);
+      item_constraints_memcmp(f0);
+      item_constraints_memcmp(s0);
+      list<crypto_char> fs_ccs = cs_to_ccs(chars_of_unbounded_int(length(f_ccs)));
+      append_assoc(fs_ccs, f_ccs, s_ccs);
+      MEMCMP_CCS(ccs_tag);
+      MEMCMP_CCS(fs_ccs);
+      memcmp_append(f_ccs, s_ccs);
+      memcmp_append(fs_ccs,  append(f_ccs, s_ccs));
+      memcmp_append(ccs_tag,  append(fs_ccs, append(f_ccs, s_ccs)));
+    case nonce_item(p0, c0, inc0):
+      IC_MEMCMP_CG
+      append_assoc(ccs_tag, cons(c_to_cc(inc0), nil), ccs_cg);
+      take_append(TAG_LENGTH + 1, append(ccs_tag, cons(c_to_cc(inc0), nil)), ccs_cg);
+      drop_append(TAG_LENGTH + 1, append(ccs_tag, cons(c_to_cc(inc0), nil)), ccs_cg);
+      public_ccs_join(ccs_tag, cons(c_to_cc(inc0), nil));
+      open [_]public_ccs(append(ccs_tag, cons(c_to_cc(inc0), nil)));
+      assert [_]exists(?cs);
+      memcmp_part p_pre = memcmp_pub(cs);
+      MEMCMP_REGION(cons(p_pre, cons(p_cg, nil)), ccs);
+    case symmetric_encrypted_item(p0, c0, pay0, ent0):
+      IC_MEMCMP_CG
+      append_assoc(ccs_tag, take(GCM_IV_SIZE, ent0), ccs_cg);
+      take_append(TAG_LENGTH + GCM_IV_SIZE, append(ccs_tag, take(GCM_IV_SIZE, ent0)), ccs_cg);
+      drop_append(TAG_LENGTH + GCM_IV_SIZE, append(ccs_tag, take(GCM_IV_SIZE, ent0)), ccs_cg);
+      public_ccs_join(ccs_tag, take(GCM_IV_SIZE, ent0));
+      open [_]public_ccs(append(ccs_tag, take(GCM_IV_SIZE, ent0)));
+      assert [_]exists(?cs);
+      memcmp_part p_pre = memcmp_pub(cs);
+      MEMCMP_REGION(cons(p_pre, cons(p_cg, nil)), ccs);
+    case hash_item(pay0):                               IC_MEMCMP_DEFAULT
+    case symmetric_key_item(p0, c0):                    IC_MEMCMP_DEFAULT
+    case public_key_item(p0, c0):                       IC_MEMCMP_DEFAULT
+    case private_key_item(p0, c0):                      IC_MEMCMP_DEFAULT
+    case hmac_item(p0, c0, pay0):                       IC_MEMCMP_DEFAULT  
+    case asymmetric_encrypted_item(p0, c0, pay0, ent0): IC_MEMCMP_DEFAULT
+    case asymmetric_signature_item(p0, c0, pay0, ent0): IC_MEMCMP_DEFAULT
+  }
 }
 
 #define ITEM_CONSTRAINTS_DETERMINISTIC \
@@ -265,8 +329,8 @@ lemma void item_constraints_injective(item i1, item i2, list<crypto_char> ccs)
     case hash_item(pay1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_HASH,
         ITEM_CONSTRAINTS_INJECTIVE_PAYLOAD(
-          cryptogram cg1 = cg_hash(ccs_pay1);
-          cryptogram cg2 = cg_hash(ccs_pay2);
+          cryptogram cg1 = cg_sha512_hash(ccs_pay1);
+          cryptogram cg2 = cg_sha512_hash(ccs_pay2);
           ccs_for_cg_inj(cg1, cg2);
         )
       )
@@ -279,23 +343,23 @@ lemma void item_constraints_injective(item i1, item i2, list<crypto_char> ccs)
       )
     case public_key_item(p1, c1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_PUBLIC_KEY,
-        cryptogram cg1 = cg_public_key(p1, c1);
-        cryptogram cg2 = cg_public_key(p2, c2);
+        cryptogram cg1 = cg_rsa_public_key(p1, c1);
+        cryptogram cg2 = cg_rsa_public_key(p2, c2);
         ccs_for_cg_inj(cg1, cg2);
         assert i1 == i2;
       )
     case private_key_item(p1, c1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_PRIVATE_KEY,
-        cryptogram cg1 = cg_private_key(p1, c1);
-        cryptogram cg2 = cg_private_key(p2, c2);
+        cryptogram cg1 = cg_rsa_private_key(p1, c1);
+        cryptogram cg2 = cg_rsa_private_key(p2, c2);
         ccs_for_cg_inj(cg1, cg2);
         assert i1 == i2;
       )
     case hmac_item(p1, c1, pay1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_HMAC,
         ITEM_CONSTRAINTS_INJECTIVE_PAYLOAD(
-          cryptogram cg1 = cg_hmac(p1, c1, ccs_pay1);
-          cryptogram cg2 = cg_hmac(p2, c2, ccs_pay2);
+          cryptogram cg1 = cg_sha512_hmac(p1, c1, ccs_pay1);
+          cryptogram cg2 = cg_sha512_hmac(p2, c2, ccs_pay2);
           ccs_for_cg_inj(cg1, cg2);
         )
       )
@@ -303,8 +367,8 @@ lemma void item_constraints_injective(item i1, item i2, list<crypto_char> ccs)
       ITEM_CONSTRAINTS_INJECTIVE(TAG_SYMMETRIC_ENC,
         ITEM_CONSTRAINTS_INJECTIVE_PAYLOAD(
           ITEM_CONSTRAINTS_SYM_ENC(
-            cryptogram cg1 = cg_auth_encrypted(p1, c1, ccs_pay1, iv1);
-            cryptogram cg2 = cg_auth_encrypted(p2, c2, ccs_pay2, iv2);
+            cryptogram cg1 = cg_aes_auth_encrypted(p1, c1, ccs_pay1, iv1);
+            cryptogram cg2 = cg_aes_auth_encrypted(p2, c2, ccs_pay2, iv2);
             ccs_for_cg_inj(cg1, cg2);
           )
         )
@@ -312,16 +376,16 @@ lemma void item_constraints_injective(item i1, item i2, list<crypto_char> ccs)
     case asymmetric_encrypted_item(p1, c1, pay1, ent1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_ASYMMETRIC_ENC,
         ITEM_CONSTRAINTS_INJECTIVE_PAYLOAD(
-          cryptogram cg1 = cg_asym_encrypted(p1, c1, ccs_pay1, ent1);
-          cryptogram cg2 = cg_asym_encrypted(p2, c2, ccs_pay2, ent2);
+          cryptogram cg1 = cg_rsa_encrypted(p1, c1, ccs_pay1, ent1);
+          cryptogram cg2 = cg_rsa_encrypted(p2, c2, ccs_pay2, ent2);
           ccs_for_cg_inj(cg1, cg2);
         )
       )
     case asymmetric_signature_item(p1, c1, pay1, ent1):
       ITEM_CONSTRAINTS_INJECTIVE(TAG_ASYMMETRIC_SIG,
         ITEM_CONSTRAINTS_INJECTIVE_PAYLOAD(
-          cryptogram cg1 = cg_asym_signature(p1, c1, ccs_pay1, ent1);
-          cryptogram cg2 = cg_asym_signature(p2, c2, ccs_pay2, ent2);
+          cryptogram cg1 = cg_rsa_signature(p1, c1, ccs_pay1, ent1);
+          cryptogram cg2 = cg_rsa_signature(p2, c2, ccs_pay2, ent2);
           ccs_for_cg_inj(cg1, cg2);
         )
       )
@@ -489,6 +553,8 @@ void ic_check_equal(char* cont1, int size1, char* cont2, int size2)
     //@ assert [f2]chars(b2, size, ?cs2');
     //@ chars_to_crypto_chars(b1, size);
     //@ chars_to_crypto_chars(b2, size);
+    //@ MEMCMP_PUB(b1)
+    //@ MEMCMP_PUB(b2)
     if (memcmp(b1, b2, (unsigned int) size) != 0)
       abort_crypto_lib("Data items were not equal");
     //@ cs_to_ccs_crypto_chars(b1, cs1');
@@ -567,6 +633,8 @@ void ic_check_equal(char* cont1, int size1, char* cont2, int size2)
       //@ assert [f2]chars(b2, GCM_IV_SIZE, ?iv_cs2);
       //@ chars_to_crypto_chars(b1, GCM_IV_SIZE);
       //@ chars_to_crypto_chars(b2, GCM_IV_SIZE);
+      //@ MEMCMP_PUB(b1)
+      //@ MEMCMP_PUB(b2)
       if (memcmp(b1, b2, GCM_IV_SIZE) != 0)
         abort_crypto_lib("Items not equal: encrypted items with distinct iv's");
       //@ cs_to_ccs_crypto_chars(b1, iv_cs1);
@@ -605,6 +673,8 @@ void ic_check_equal(char* cont1, int size1, char* cont2, int size2)
          public_ccs_cg(cg2);
          chars_to_secret_crypto_chars(b_cg1, size_cg);
          chars_to_secret_crypto_chars(b_cg2, size_cg);
+         MEMCMP_CCS(ccs_cg1)
+         MEMCMP_CCS(ccs_cg2)
        }
        else
        {
@@ -612,10 +682,10 @@ void ic_check_equal(char* cont1, int size1, char* cont2, int size2)
          assert [_]ic_cg(i2)(ccs_cg2, ?cg2_);
          cg1 = cg1_;
          cg2 = cg2_;
+         MEMCMP_REGION(cons(memcmp_sec(cg1), nil), ccs_cg1)
+         MEMCMP_REGION(cons(memcmp_sec(cg2), nil), ccs_cg2)
        }
     @*/
-    //@ close memcmp_secret(b_cg1, size_cg, ccs_cg1, cg1);
-    //@ close memcmp_secret(b_cg2, size_cg, ccs_cg2, cg2);
     if (memcmp(b_cg1, b_cg2, (unsigned int) size_cg) != 0)
       abort_crypto_lib("Items were not equal");
     /*@ if (tag1 == TAG_NONCE || tag1 == TAG_SYMMETRIC_ENC)

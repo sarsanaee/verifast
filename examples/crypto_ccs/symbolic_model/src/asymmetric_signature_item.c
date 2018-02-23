@@ -108,14 +108,14 @@ struct item *asymmetric_signature(struct item *key, struct item *payload)
                       asym_sig_havege_random_stub)
                      (havege_state_initialized)(state, out, len) { call(); } @*/
     //@ open principal(principal1, count1);
-    if(pk_sign(&context, POLARSSL_MD_NONE,
+    if(pk_sign(&context, MBEDTLS_MD_NONE,
                payload->content, (unsigned int) payload->size,
                output, &olen,
                asym_sig_havege_random_stub, random_state) != 0)
       abort_crypto_lib("Signing failed");
     //@ open principal(principal1, count1 + 1);
     //@ open cryptogram(output, ?sig_length, ?sig_ccs, ?sig_cg);
-    //@ assert sig_cg == cg_asym_signature(principal, count, pay_ccs, ?ent);
+    //@ assert sig_cg == cg_rsa_signature(principal, count, pay_ccs, ?ent);
     //@ assert u_integer(&olen, sig_length);
     //@ assert sig_length > 0 &*& sig_length <= RSA_KEY_SIZE;
     nonces_hide_state(random_state);
@@ -134,6 +134,7 @@ struct item *asymmetric_signature(struct item *key, struct item *payload)
     if (result->content == 0) {abort_crypto_lib("Malloc failed");}
     write_tag(result->content, TAG_ASYMMETRIC_SIG);
     //@ assert result->content |-> ?cont &*& result->size |-> ?size;
+    //@ chars_to_crypto_chars(result->content + TAG_LENGTH, olen);
     memcpy(result->content + TAG_LENGTH, output, olen);
     //@ item e = asymmetric_signature_item(principal, count, some(pay), ent);
     //@ close ic_cg(e)(sig_ccs, sig_cg);
@@ -200,7 +201,7 @@ void asymmetric_signature_verify(struct item *key, struct item *item,
     //@ OPEN_ITEM_CONSTRAINTS(sig, sig_ccs, pub)
     //@ assert [_]ic_parts(sig)(?sig_tag, ?sig_cont);
     //@ open [_]ic_cg(sig)(_, ?cg_sig);
-    //@ assert cg_sig == cg_asym_signature(principal1, count1, ?ccs_pay, ent);
+    //@ assert cg_sig == cg_rsa_signature(principal1, count1, ?ccs_pay, ent);
 
     if (item->size > RSA_KEY_SIZE)
       abort_crypto_lib("Assymetric signature checking failed: incorrect sizes");
@@ -213,7 +214,7 @@ void asymmetric_signature_verify(struct item *key, struct item *item,
     //@ if (col) cg_sig = ccs_for_cg_sur(sig_cont, tag_asym_signature);
     //@ if (col) public_ccs_cg(cg_sig);
     //@ close cryptogram(s_cont + TAG_LENGTH, s, sig_cont, cg_sig);
-    if(pk_verify(&context, POLARSSL_MD_NONE, item->content,
+    if(pk_verify(&context, MBEDTLS_MD_NONE, item->content,
                  (unsigned int) item->size,
                  signature->content + TAG_LENGTH,
                  (unsigned int) (signature->size - TAG_LENGTH)) != 0)

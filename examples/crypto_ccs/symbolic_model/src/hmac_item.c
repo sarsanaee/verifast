@@ -31,7 +31,6 @@ void check_is_hmac(struct item *item)
 struct item *create_hmac(struct item *key, struct item *payload)
   /*@ requires [?f0]world(?pub, ?key_clsfy) &*&
                [?f1]item(payload, ?pay, pub) &*&
-                 [_]hash_item_payload(pub, _, pay) &*&
                [?f2]item(key, ?k, pub) &*&
                  k == symmetric_key_item(?creator, ?id); @*/
   /*@ ensures  [f0]world(pub, key_clsfy) &*&
@@ -67,15 +66,15 @@ struct item *create_hmac(struct item *key, struct item *payload)
   if (payload->size < MINIMAL_STRING_SIZE)
     {abort_crypto_lib("Payload of hmac was to small");}
   //@ close [f0]world(pub, key_clsfy);
-  //@ hash_item_payload(pay);
+  //@ item_constraints_memcmp(pay);
   sha512_hmac(key->content + TAG_LENGTH, (unsigned int) GCM_KEY_SIZE,
               payload->content, (unsigned int) payload->size,
               hmac->content + TAG_LENGTH, 0);
   //@ assert hmac->content |-> ?cont &*& hmac->size |-> ?size;
   //@ open cryptogram(cont + TAG_LENGTH, HMAC_SIZE, ?h_ccs, ?h_cg);
-  //@ assert col || h_cg == cg_hmac(creator, id, pay_ccs);
+  //@ assert col || h_cg == cg_sha512_hmac(creator, id, pay_ccs);
   //@ if (col) h_cg == ccs_for_cg_sur(h_ccs, tag_hmac);
-  //@ assert h_cg == cg_hmac(?p0, ?c0, _);
+  //@ assert h_cg == cg_sha512_hmac(?p0, ?c0, _);
   //@ item h = hmac_item(p0, c0, some(pay));
   //@ close ic_cg(h)(h_ccs, h_cg);
   //@ close well_formed_item_ccs(h)(pay_ccs);

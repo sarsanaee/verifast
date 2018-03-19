@@ -38,7 +38,8 @@ let c_keywords = [
   "const"; "volatile"; "register"; "ifdef"; "elif"; "undef";
   "SHRT_MIN"; "SHRT_MAX"; "USHRT_MAX"; "UINT_MAX"; "UCHAR_MAX";
   "LLONG_MIN"; "LLONG_MAX"; "ULLONG_MAX";
-  "__int8"; "__int16"; "__int32"; "__int64"; "__int128"
+  "__int8"; "__int16"; "__int32"; "__int64"; "__int128";
+  "inline"; "__inline"; "__inline__"; "__forceinline"
 ]
 
 let java_keywords = [
@@ -228,6 +229,7 @@ and
        -> type_params_pop();
           Interface (l, cn, il, fields mem, methods cn mem, instance_preds mem)::ds
      | [< d = parse_decl; ds = parse_decls_core >] -> d@ds
+     | [< '(_, Kwd ";"); ds = parse_decls_core >] -> ds
      | [< >] -> []
      end
   >] -> ds
@@ -433,6 +435,13 @@ and
     (noneToEmptyList functiontypetypeparams, noneToEmptyList functiontypeparams, params)
   | [< params = parse_paramlist >] -> ([], [], params)
 and
+  parse_ignore_inline = parser
+  [< '(l, Kwd "inline") >] -> ()
+| [< '(l, Kwd "__inline") >] -> ()
+| [< '(l, Kwd "__inline__") >] -> ()
+| [< '(l, Kwd "__forceinline") >] -> ()
+| [< >] -> ()
+and
   parse_decl = parser
   [< '(l, Kwd "struct"); '(_, Ident s); d = parser
     [< fs = parse_fields; '(_, Kwd ";") >] -> Struct (l, s, Some fs)
@@ -468,7 +477,7 @@ and
      elems = rep_comma (parser [< '(_, Ident e); init = opt (parser [< '(_, Kwd "="); e = parse_expr >] -> e) >] -> (e, init));
      '(_, Kwd "}"); '(_, Kwd ";"); >] ->
   [EnumDecl(l, n, elems)]
-| [< '(_, Kwd "static"); t = parse_return_type; d = parse_func_rest Regular t Private >] -> check_function_for_contract d
+| [< '(_, Kwd "static"); _ = parse_ignore_inline; t = parse_return_type; d = parse_func_rest Regular t Private >] -> check_function_for_contract d
 | [< t = parse_return_type; d = parse_func_rest Regular t Public >] -> check_function_for_contract d
 and check_for_contract: 'a. 'a option -> loc -> string -> (asn * asn -> 'a) -> 'a = fun contract l m f ->
   match contract with
@@ -1607,7 +1616,7 @@ let rec parse_include_directives (ignore_eol: bool ref) (verbose: int) (enforceA
   parse_include_directives_core []
 
 let parse_c_file (path: string) (reportRange: range_kind -> loc -> unit) (reportShouldFail: loc -> unit) (verbose: int) 
-            (include_paths: string list) (enforceAnnotations: bool) (dataModel: data_model): ((loc * (include_kind * string * string) * string list * package list) list * package list) = (* ?parse_c_file *)
+            (include_paths: string list) (define_macros: string list) (enforceAnnotations: bool) (dataModel: data_model): ((loc * (include_kind * string * string) * string list * package list) list * package list) = (* ?parse_c_file *)
   Stopwatch.start parsing_stopwatch;
   if verbose = -1 then Printf.printf "%10.6fs: >> parsing C file: %s \n" (Perf.time()) path;
   let result =
@@ -1615,7 +1624,7 @@ let parse_c_file (path: string) (reportRange: range_kind -> loc -> unit) (report
       let text = readFile path in
       make_lexer (common_keywords @ c_keywords) ghost_keywords path text reportRange ~inGhostRange reportShouldFail
     in
-    let (loc, ignore_eol, token_stream) = make_preprocessor make_lexer path verbose include_paths in
+    let (loc, ignore_eol, token_stream) = make_preprocessor make_lexer path verbose include_paths define_macros in
     let parse_c_file =
       parser
         [< (headers, _) = parse_include_directives ignore_eol verbose enforceAnnotations dataModel; 
@@ -1631,7 +1640,7 @@ let parse_c_file (path: string) (reportRange: range_kind -> loc -> unit) (report
   result
 
 let parse_header_file (path: string) (reportRange: range_kind -> loc -> unit) (reportShouldFail: loc -> unit) (verbose: int) 
-         (include_paths: string list) (enforceAnnotations: bool) (dataModel: data_model): ((loc * (include_kind * string * string) * string list * package list) list * package list) =
+         (include_paths: string list) (define_macros: string list) (enforceAnnotations: bool) (dataModel: data_model): ((loc * (include_kind * string * string) * string list * package list) list * package list) =
   Stopwatch.start parsing_stopwatch;
   if verbose = -1 then Printf.printf "%10.6fs: >> parsing Header file: %s \n" (Perf.time()) path;
   let isGhostHeader = Filename.check_suffix path ".gh" in
@@ -1640,7 +1649,7 @@ let parse_header_file (path: string) (reportRange: range_kind -> loc -> unit) (r
       let text = readFile path in
       make_lexer (common_keywords @ c_keywords) ghost_keywords path text reportRange ~inGhostRange:inGhostRange reportShouldFail
     in
-    let (loc, ignore_eol, token_stream) = make_preprocessor make_lexer path verbose include_paths in
+    let (loc, ignore_eol, token_stream) = make_preprocessor make_lexer path verbose include_paths define_macros in
     let p = parser
       [< (headers, _) = parse_include_directives ignore_eol verbose enforceAnnotations dataModel; 
          ds = parse_decls CLang dataModel enforceAnnotations ~inGhostHeader:isGhostHeader; 

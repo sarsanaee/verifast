@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/verifast/verifast.svg?branch=master)](https://travis-ci.org/verifast/verifast) [![Build status](https://ci.appveyor.com/api/projects/status/1w7vchky3k6erltw?svg=true)](https://ci.appveyor.com/project/verifast/verifast) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.819853.svg)](https://doi.org/10.5281/zenodo.819853)
+[![Build Status](https://travis-ci.org/verifast/verifast.svg?branch=master)](https://travis-ci.org/verifast/verifast) [![Build status](https://ci.appveyor.com/api/projects/status/1w7vchky3k6erltw?svg=true)](https://ci.appveyor.com/project/verifast/verifast) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1182724.svg)](https://doi.org/10.5281/zenodo.1182724)
 
 VeriFast
 ========
@@ -31,9 +31,10 @@ Simply extract the files from the archive to any location in your filesystem. Al
 
 Compiling
 ---------
+
 - [Windows](README.Windows.md)
 - [Linux](README.Linux.md)
-- [OS X](README.MacOS.md)
+- [macOS](README.MacOS.md)
 
 Documentation
 -------------
@@ -75,6 +76,11 @@ We gratefully acknowledge the following infrastructure providers.
 ### Funding
 
 This work is supported in part by the Flemish Research Fund (FWO-Vlaanderen), by the EU FP7 projects SecureChange, STANCE, ADVENT, and VESSEDIA, by Microsoft Research Cambridge as part of the Verified Software Initiative, and by the Research Fund KU Leuven.
+
+Mailing lists
+-------------
+
+To be notified whenever commits are pushed to this repository, join the [verifast-commits](https://groups.google.com/forum/#!forum/verifast-commits) Google Groups forum.
 
 Third-Party Resources
 ---------------------

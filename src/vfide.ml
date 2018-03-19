@@ -13,6 +13,7 @@ open Vfconfig
 type layout = FourThree | Widescreen
 
 let include_paths: string list ref = ref []
+let define_macros: string list ref = ref []
 
 let () = Unix.putenv "LANG" "en_US" (* This works around a problem that causes vfide to become unusable in the Chinese locale. *)
 
@@ -98,12 +99,23 @@ let sys cmd =
   if exitStatus <> Unix.WEXITED 0 then failwith (Printf.sprintf "Command '%s' failed with exit status %s" cmd (string_of_process_status exitStatus));
   line
 
+let string_of_time time =
+  let tm = Unix.gmtime time in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d%9f" (tm.tm_year + 1900) (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec (fst (modf time))
+
 let path_last_modification_time path =
   (Unix.stat path).st_mtime
 
 let file_has_changed path mtime =
   try
-    path_last_modification_time path <> mtime
+    let mtime' = path_last_modification_time path in
+    let result = mtime' <> mtime in
+    if result then begin
+      Printf.printf "File '%s' was last read by vfide at '%s' but was modified by another process at '%s'.\n"
+        path (string_of_time mtime) (string_of_time mtime');
+      flush stdout
+    end;
+    result
   with Unix.Unix_error (_, _, _) -> true
 
 let in_channel_last_modification_time chan =
@@ -771,8 +783,9 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let text = (tab#buffer: GSourceView2.source_buffer)#get_text () in
     output_string chan (utf8_to_file (convert_eol !(tab#eol) text));
     flush chan;
-    let mtime = out_channel_last_modification_time chan in
+    (* let mtime = out_channel_last_modification_time chan in *)
     close_out chan;
+    let mtime = path_last_modification_time thePath in
     tab#path := Some (thePath, mtime);
     tab#buffer#set_modified false;
     updateBufferTitle tab;
@@ -1344,6 +1357,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
                 option_provides = [];
                 option_keep_provide_files = true;
                 option_include_paths = !include_paths;
+                option_define_macros = !define_macros;
                 option_safe_mode = false;
                 option_header_whitelist = [];
               }
@@ -1437,7 +1451,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
             (* Save all tabs to disk firsts. Only continue on success. *)
             if not (List.exists sync_with_disk !buffers) then begin
               try begin
-                let new_contents = shape_analyse_frontend path !include_paths (getCursor ()) in
+                let new_contents = shape_analyse_frontend path !include_paths !define_macros (getCursor ()) in
                 let buffer = tab#buffer in
                 buffer#set_text new_contents;
                 (* syntax highlighting gets updated automatically *)
@@ -1725,6 +1739,9 @@ let () =
     | "-I"::arg::args -> ( match (Some arg) with
        None -> ( ) | Some arg -> include_paths := arg :: !include_paths);
        iter args
+    | "-D"::arg::args -> ( match (Some arg) with
+       None -> ( ) | Some arg -> define_macros := arg :: !define_macros);
+       iter args
     | "-layout"::"fourthree"::args -> layout := FourThree; iter args
     | "-layout"::"widescreen"::args -> layout := Widescreen; iter args
     | "-javac"::args -> javaFrontend := true; iter args
@@ -1740,6 +1757,7 @@ let () =
         "-codeFont fontSpec";
         "-traceFont fontSpec";
         "-I IncludeDir";
+        "-D DefineName";
         "-layout fourthree|widescreen";
         "-javac";
         "-runtime";

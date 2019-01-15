@@ -1,3 +1,4 @@
+begin_parallel
 let verifast_both
 ifz3 verifast
 verifast -prover redux
@@ -8,6 +9,9 @@ cd bin
   cd ..
 cd ..
 cd examples
+  cd jayanti
+    verifast threading.o atomics.o jayanti.c client.c
+  cd ..
   cd abstract_io
     mysh < io2.mysh
   cd ..
@@ -27,24 +31,26 @@ cd examples
   cd splitcounter
     verifast -prover redux -c -disable_overflow_check splitcounter.c
   cd ..
-  cd crypto
-    mysh -cpus 1 < crypto.mysh
-  cd ..
-  cd crypto_with_flow
-    mysh -cpus 1 < crypto_with_flow.mysh
-  cd ..
   cd crypto_ccs
-    mysh -cpus 1 < crypto_ccs.mysh
+    call crypto_ccs.mysh
   cd ..
   cd floating_point
-    verifast_both -c sqrt.c
+    cd sqrt_exact
+      verifast -prover redux -c sqrt_exact.c
+    cd ..
+    cd sqrt_with_rounding
+      verifast -prover redux -c sqrt_with_rounding.c
+    cd ..
+    cd interval_arithmetic
+      verifast -prover z3v4.5 -c interval.c
+    cd ..
   cd ..
   verifast_both -c -disable_overflow_check -allow_should_fail forall.c
   verifast_both -c -disable_overflow_check -allow_should_fail address_of_local.c
   verifast_both -c -disable_overflow_check alt_threading.c
   verifast_both -c args.c
-  verifast_both -disable_overflow_check array_of_struct.c
-  verifast_both -disable_overflow_check -c arraylist.c
+  verifast_both array_of_struct.c
+  verifast_both -c arraylist.c
   verifast_both -disable_overflow_check threading.o barrier.c
   ifz3v4.5 verifast -prover z3v4.5 -c bitops.c
   verifast_both -c static_array.c
@@ -195,6 +201,7 @@ cd examples
   cd queue
     verifast_both threading.o atomics.o queue.c queue_client.c
   cd ..
+  verifast_both -c -disable_overflow_check quicksort.c
   verifast_both -c tokenizer_test.c
   verifast_both -c truncating.c
   verifast_both -disable_overflow_check stringBuffers.c tokenizer.c ghostlist.o rcl.c
@@ -214,6 +221,7 @@ cd examples
   verifast_both -c -disable_overflow_check tuerk.c
   verifast_both -c -disable_overflow_check tuerk_explicit.c
   verifast_both -c typedefs.c
+  verifast_both -c umemcpy.c
   verifast_both -disable_overflow_check wc.c
   verifast_both -c -allow_should_fail carrays.c
   cd helloproc
@@ -398,6 +406,15 @@ cd tutorial_solutions
   verifast_both students.c
 cd ..
 cd tests
+  verifast -c -allow_should_fail any_russell.c
+  verifast -c typedef_enum_with_body.c
+  verifast -c -allow_should_fail noreturn.c
+  verifast_both -c redux_nonlinear_mult.c
+  verifast_both -c simplex_secondary_closes.c
+  verifast_both -c simplex_secondary_closes2.c
+  verifast_both -c match_ctor_pat.c
+  verifast_both -shared -target IP16 -allow_should_fail integer__pointee_pred.c
+  verifast_both -c llong_fields.c
   verifast_both -c -allow_should_fail -allow_undeclared_struct_types undeclared_structs.c
   verifast_both stresstest-one-plus-one.c
   cd test-includepath
@@ -425,6 +442,8 @@ cd tests
     cd ..
   cd ..
   cd errors
+    verifast_both -c -allow_should_fail macro_in_macro_arg.c
+    verifast -c -prover z3v4.5 int_lit_overflow.c
     verifast_both -c -allow_should_fail basics.c
     verifast_both -c -allow_should_fail typecheck1.c
     verifast_both -c -allow_should_fail ghost_assignment.c
@@ -456,5 +475,9 @@ cd tests
     verifast_both -c -allow_should_fail fraction-of-fraction.c
     verifast_both -c -allow_should_fail test-precise-predicate-pointsto-errorcase.c
     verifast_both -c -allow_should_fail test-ghost-break-from-real-loop.c
+    cd context_free_pp
+      verifast -c -allow_should_fail lib.c prog.c
+    cd ..
   cd ..
 cd ..
+end_parallel

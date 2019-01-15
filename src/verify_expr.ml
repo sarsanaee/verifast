@@ -32,7 +32,8 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | Read (l, e, f) -> expr_assigned_variables e
     | WRead (l, e, fparent, fname, frange, fstatic, fvalue, fghost) -> expr_assigned_variables e
     | ReadArray (l, ea, ei) -> expr_assigned_variables ea @ expr_assigned_variables ei
-    | Deref (l, e, _) -> expr_assigned_variables e
+    | Deref (l, e) -> expr_assigned_variables e
+    | WDeref (l, e, _) -> expr_assigned_variables e
     | CallExpr (l, g, _, _, pats, _) -> flatmap (function (LitPat e) -> expr_assigned_variables e | _ -> []) pats
     | ExprCallExpr (l, e, es) -> flatmap expr_assigned_variables (e::es)
     | WPureFunCall (l, g, targs, args) -> flatmap expr_assigned_variables args
@@ -104,10 +105,10 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     consume_chunk rules h [] [] [] l (predSymb, true) [] real_unit dummypat (Some 1) [TermPat p; dummypat] (fun chunk h coef [_; t] size ghostenv env env' ->
       cont h coef t)
     
-  let get_field h t fparent fname l cont =
-    let (_, (_, _, _, _, f_symb, _, _)) = List.assoc (fparent, fname) field_pred_map in
-    get_points_to h t f_symb l cont
-  
+  let get_points_to' h p tpx l cont =
+    consume_points_to_chunk rules h [] [] [] l tpx real_unit dummypat p dummypat $. fun chunk h coef value ghostenv env env' ->
+    cont h coef value
+
   let current_thread_name = "currentThread"
   let current_thread_type = intType
   
@@ -130,19 +131,24 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   
   let functypemap = functypemap1 @ functypemap0
   
-  let check_breakpoint h env (((path, line, col), _) as l) =
+  let check_breakpoint h env l =
+    let ((path, line, col), _) = root_caller_token l in
     match breakpoint with
       None -> ()
     | Some (path0, line0) ->
       if line = line0 && path = path0 then
         assert_false h env l "Breakpoint reached." None
 
-  let check_exportpoint ((path, line, _), _) =
+  let check_exportpoint l =
     match exportpoint with
       None -> ()
     | Some (exporter, path0, line0) ->
-      if line = line0 && path = path0 then
+      match l with
+      | Lexed ((path0, line0, _), _)
+      | MacroExpansion (Lexed ((path0, line0, _), _), _)
+      | MacroParamExpansion (Lexed ((path0, line0, _), _), _) ->
         dump_context exporter
+      | _ -> ()
 
   let is_empty_chunk name targs frac args =
     List.exists
@@ -287,6 +293,11 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           if List.mem_assoc x xm then static_error l "Duplicate parameter name." None;
           if List.mem_assoc x tenv0 then static_error l ("Parameter '" ^ x ^ "' hides existing variable '" ^ x ^ "'.") None;
           let t = check_pure_type (pn,ilist) tparams1 te in
+          let t =
+            match t with
+              ArrayType elemType | StaticArrayType (elemType, _) when language = CLang -> PtrType elemType
+            | _ -> t
+          in
           iter ((x, t)::xm) xs
       in
       iter [] xs
@@ -366,6 +377,11 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     in
     (rt, xmap, functype_opt, pre, pre_tenv, post)
   
+  let is_transparent_stmt s =
+    match s with
+    | PureStmt _ | NonpureStmt _ | BlockStmt _ -> true
+    | _ -> false
+    
   let (funcmap1, prototypes_implemented) =
     let rec iter pn ilist funcmap prototypes_implemented ds =
       match ds with
@@ -375,6 +391,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         let fterm = List.assoc fn funcnameterms in
         if body <> None then
           ctxt#assert_term (ctxt#mk_eq (ctxt#mk_app func_rank [fterm]) (ctxt#mk_reallit !func_counter));
+        begin match body with None -> () | Some (ss, _) -> List.iter (stmt_iter (fun s -> if not (is_transparent_stmt s) then reportStmt (stmt_loc s))) ss end;
         incr func_counter;
         let (rt, xmap, functype_opt, pre, pre_tenv, post) =
           check_func_header pn ilist [] [] [] l k tparams rt fn (Some fterm) xs nonghost_callers_only functype_opt contract_opt terminates body
@@ -998,7 +1015,8 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | WRead(_, e, _, _, _, _, _, _) -> expr_mark_addr_taken e locals
     | ReadArray(_, e1, e2) -> (expr_mark_addr_taken e1 locals); (expr_mark_addr_taken e2 locals)
     | WReadArray(_, e1, _, e2) -> (expr_mark_addr_taken e1 locals); (expr_mark_addr_taken e2 locals)
-    | Deref(_, e, _) -> expr_mark_addr_taken e locals
+    | Deref(_, e) -> expr_mark_addr_taken e locals
+    | WDeref(_, e, _) -> expr_mark_addr_taken e locals
     | CallExpr(_, _, _, ps1, ps2, _) -> List.iter (fun pat -> pat_expr_mark_addr_taken pat locals) (ps1 @ ps2)
     | ExprCallExpr(_, e, es) -> List.iter (fun e -> expr_mark_addr_taken e locals) (e :: es)
     | WFunPtrCall(_, _, es) -> List.iter (fun e -> expr_mark_addr_taken e locals) es
@@ -1034,7 +1052,6 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     match a with
       PointsTo(_, e, pat) -> expr_mark_addr_taken e locals; pat_expr_mark_addr_taken pat locals;
     | WPointsTo(_, e, _, pat) -> expr_mark_addr_taken e locals; pat_expr_mark_addr_taken pat locals;
-    | PredAsn(_, _, _, pats1, pats2) -> List.iter (fun p -> pat_expr_mark_addr_taken p locals) (pats1 @ pats2)
     | WPredAsn(_, _, _, _, pats1, pats2) -> List.iter (fun p -> pat_expr_mark_addr_taken p locals) (pats1 @ pats2)
     | InstPredAsn(_, e, _, index, pats) -> expr_mark_addr_taken e locals; expr_mark_addr_taken index locals; List.iter (fun p -> pat_expr_mark_addr_taken p locals) pats
     | WInstPredAsn(_, eopt, _, _, _, _, e, pats) -> 
@@ -1135,7 +1152,8 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | WRead(_, e, _, _, _, _, _, _) -> expr_address_taken e
     | ReadArray(_, e1, e2) -> (expr_address_taken e1) @ (expr_address_taken e2)
     | WReadArray(_, e1, _, e2) -> (expr_address_taken e1) @ (expr_address_taken e2)
-    | Deref(_, e, _) -> (expr_address_taken e)
+    | Deref(_, e) -> (expr_address_taken e)
+    | WDeref(_, e, _) -> (expr_address_taken e)
     | CallExpr(_, _, _, ps1, ps2, _) -> List.flatten (List.map (fun pat -> pat_address_taken pat) (ps1 @ ps2))
     | ExprCallExpr(_, e, es) -> List.flatten (List.map (fun e -> expr_address_taken e) (e :: es))
     | WFunPtrCall(_, _, es) -> List.flatten (List.map (fun e -> expr_address_taken e) es)
@@ -1163,6 +1181,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | AssignExpr(_, e1, e2) -> (expr_address_taken e1) @ (expr_address_taken e2)
     | AssignOpExpr(_, e1, _, e2, _) -> (expr_address_taken e1) @ (expr_address_taken e2)
     | InitializerList (_, es) -> flatmap expr_address_taken es
+    | _ -> []
   
   let rec stmt_address_taken s =
     (* incomplete: might miss &x expressions *)
@@ -1234,7 +1253,14 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           let length = ctxt#mk_intlit elemCount in
           assume_eq (mk_length elems) length $. fun () ->
           cont (Chunk ((arrayPredSymb, true), [], coef, [addr; length; elems], None)::h)
-        | None -> (* Produce a character array of the correct size *)
+        | None ->
+        match int_rank_and_signedness elemTp with
+          Some (k, signedness) ->
+          let length = ctxt#mk_intlit elemCount in
+          assume_eq (mk_length elems) length $. fun () ->
+          cont (Chunk ((integers__symb (), true), [], coef, [addr; rank_size_term k; mk_bool (signedness = Signed); length; elems], None)::h)
+        | None ->
+          (* Produce a character array of the correct size *)
           produce_char_array_chunk h addr elemCount
       in
       begin match elemTp, init with
@@ -1330,7 +1356,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         | Some (Some e) -> eval e
         | None -> get_unique_var_symb "value" tp
       in
-      cont (Chunk ((pointee_pred_symb l tp, true), [], coef, [addr; value], None)::h)
+      produce_points_to_chunk l h tp coef addr value cont
   
   let rec consume_c_object l addr tp h consumePaddingChunk cont =
     match tp with
@@ -1339,6 +1365,12 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         Some (_, _, _, arrayPredSymb, _, _) ->
         let pats = [TermPat addr; TermPat (ctxt#mk_intlit elemCount); dummypat] in
         consume_chunk rules h [] [] [] l (arrayPredSymb, true) [] real_unit real_unit_pat (Some 2) pats $. fun _ h _ _ _ _ _ _ ->
+        cont h
+      | None ->
+      match int_rank_and_signedness elemTp with
+        Some (k, signedness) ->
+        let pats = [TermPat addr; TermPat (rank_size_term k); TermPat (mk_bool (signedness = Signed)); TermPat (ctxt#mk_intlit elemCount); dummypat] in
+        consume_chunk rules h [] [] [] l (integers__symb (), true) [] real_unit real_unit_pat (Some 4) pats $. fun _ h _ _ _ _ _ _ ->
         cont h
       | None ->
         let pats = [TermPat addr; TermPat (sizeof l tp); dummypat] in
@@ -1374,7 +1406,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       in
       iter h fields
     | _ ->
-      consume_chunk rules h [] [] [] l (pointee_pred_symb l tp, true) [] real_unit real_unit_pat (Some 1) [TermPat addr; dummypat] $. fun _ h _ _ _ _ _ _ ->
+      consume_points_to_chunk rules h [] [] [] l tp real_unit real_unit_pat addr dummypat $. fun _ h _ _ _ _ _ ->
       cont h
   
   let assume_is_of_type l t tp cont =
@@ -1699,6 +1731,20 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | Upcast (e, _, _) -> is_safe_expr e
     | _ -> false
   
+  let rec asserts_exclusive_ownership a =
+    match a with
+      ExprAsn (l, e) -> false
+    | Sep (l, a1, a2) -> asserts_exclusive_ownership a1 || asserts_exclusive_ownership a2
+    | IfAsn (l, e, a1, a2) -> asserts_exclusive_ownership a1 || asserts_exclusive_ownership a2
+    | WSwitchAsn (l, e, i, cs) ->
+      List.exists (function WSwitchAsnClause (l, c, xs, _, a) -> asserts_exclusive_ownership a) cs
+    | EmpAsn _ -> false
+    | ForallAsn (_, _, _, _) -> false
+    | CoefAsn (l, DummyPat, a) -> false (* TODO: Support more coefpats *)
+    | EnsuresAsn (l, _) -> false
+    | WMatchAsn (_, _, _, _) -> false
+    | _ -> true
+
   let rec verify_expr readonly (pn,ilist) tparams pure leminfo funcmap sizemap tenv ghostenv h env xo e cont econt =
     let (envReadonly, heapReadonly) = readonly in
     let verify_expr readonly h env xo e cont = verify_expr readonly (pn,ilist) tparams pure leminfo funcmap sizemap tenv ghostenv h env xo e (fun h env v -> cont h env v) econt in
@@ -1732,10 +1778,10 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         None -> has_env_effects(); cont h (update env x w)
       | Some(symb) -> 
           has_heap_effects();
-          let predSymb = pointee_pred_symb l tpx in
-          get_points_to h symb predSymb l (fun h coef _ ->
-            if not (definitely_equal coef real_unit) then assert_false h env l "Writing to a global variable requires full permission." None;
-            cont (Chunk ((predSymb, true), [], real_unit, [symb; w], None)::h) env)
+          get_points_to' h symb tpx l $. fun h coef _ ->
+          if not (definitely_equal coef real_unit) then assert_false h env l "Writing to a global variable requires full permission." None;
+          produce_points_to_chunk l h tpx real_unit symb w $. fun h ->
+          cont h env
     in
     let check_correct h xo g targs args (lg, callee_tparams, tr, ps, funenv, pre, post, epost, terminates, v) is_upcall target_class cont =
       (* check_expr is needed here because args are not typechecked yet. Why does check_expr_t not check the arguments of a WFunCall? *)
@@ -1767,9 +1813,9 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         eval_h h env arr $. fun h env arr ->
         eval_h h env i $. fun h env i ->
         cont h env (LValues.ArrayElement (l, arr, elem_tp, i))
-      | Deref (l, w, pointeeType) ->
+      | WDeref (l, w, pointeeType) ->
         eval_h h env w $. fun h env target ->
-        cont h env (LValues.Deref (l, target, get !pointeeType))
+        cont h env (LValues.Deref (l, target, pointeeType))
       | _ -> static_error (expr_loc lhs) "Cannot assign to this expression." None
     in
     let read_lvalue h env lvalue cont =
@@ -1792,8 +1838,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       | LValues.ArrayElement (l, arr, elem_tp, i) when language = CLang ->
         cont h env (read_c_array h env l arr i elem_tp)
       | LValues.Deref (l, target, pointeeType) ->
-        let predSymb = pointee_pred_symb l pointeeType in
-        consume_chunk rules h [] [] [] l (predSymb, true) [] real_unit dummypat (Some 1) [TermPat target; dummypat] $. fun chunk h _ [_; value] _ _ _ _ ->
+        consume_points_to_chunk rules h [] [] [] l pointeeType real_unit dummypat target dummypat $. fun chunk h _ value _ _ _ ->
         cont (chunk::h) env value
     in
     let rec write_lvalue h env lvalue value cont =
@@ -1827,14 +1872,46 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       | LValues.ArrayElement (l, arr, elem_tp, i) when language = CLang ->
         has_heap_effects();
         if pure then static_error l "Cannot write in a pure context." None;
-        let predSymb, arrayPredSymb =
-          match try_pointee_pred_symb0 elem_tp with
-            Some (_, psymb, _, asymb, _, _) -> psymb, asymb
-          | None -> static_error l ("Dereferencing array elements of type "^string_of_type elem_tp^" is not yet supported.") None
+        let consume_elem () =
+          let target = ctxt#mk_add arr (ctxt#mk_mul i (sizeof l elem_tp)) in
+          consume_points_to_chunk rules h [] [] [] l elem_tp real_unit real_unit_pat target dummypat $. fun _ h _ _ _ _ _ ->
+          produce_points_to_chunk l h elem_tp real_unit target value $. fun h ->
+          cont h env
         in
+        let write_integer__array_element () =
+          match int_rank_and_signedness elem_tp with
+            Some (k, signedness) ->
+            let integers__symb = (integers__symb (), true) in
+            let size = rank_size_term k in
+            let signed = mk_bool (signedness = Signed) in
+            let h0 = h in
+            begin match h |> extract begin function
+              Chunk (g, [], coef, [arr'; size'; signed'; count'; elems'], _) as c
+                when
+                  predname_eq g integers__symb &&
+                  definitely_equal arr' arr &&
+                  definitely_equal size' size &&
+                  definitely_equal signed' signed &&
+                  ctxt#query (ctxt#mk_and (ctxt#mk_le int_zero_term i) (ctxt#mk_lt i count')) ->
+                  Some c
+            | _ -> None
+            end with
+            | Some (Chunk (_, _, coef, [arr'; size'; signed'; count'; vs], _), h) ->
+              if not (definitely_equal coef real_unit) then assert_false h0 env l "Assignment requires full permission." None;
+              let (_, _, _, _, update_symb) = List.assoc "update" purefuncmap in
+              let updated = mk_app update_symb [i; apply_conversion (provertype_of_type elem_tp) ProverInductive value; vs] in
+              cont (Chunk (integers__symb, [], real_unit, [arr'; size'; signed'; count'; updated], None)::h) env
+            | None ->
+              consume_elem()
+            end
+          | None -> consume_elem ()
+        in
+        begin match try_pointee_pred_symb0 elem_tp with
+        | None -> write_integer__array_element ()
+        | Some (_, _, _, arrayPredSymb, _, _) ->
         let arrayPredSymb1 = (arrayPredSymb, true) in
         let h0 = h in
-        begin match h |> extract begin function
+        match h |> extract begin function
           Chunk (g, [], coef, [arr'; size'; elems'], _) as c
             when
               predname_eq g arrayPredSymb1 &&
@@ -1849,16 +1926,14 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           let updated = mk_app update_symb [i; apply_conversion (provertype_of_type elem_tp) ProverInductive value; vs] in
           cont (Chunk (arrayPredSymb1, [], real_unit, [a; n; updated], None) :: h) env
         | None ->
-          let target = ctxt#mk_add arr (ctxt#mk_mul i (sizeof l elem_tp)) in
-          consume_chunk rules h [] [] [] l (predSymb, true) [] real_unit real_unit_pat (Some 1) [TermPat target; dummypat] $. fun _ h _ _ _ _ _ _ ->
-          cont (Chunk ((predSymb, true), [], real_unit, [target; value], None)::h) env
+          consume_elem ()
         end
       | LValues.Deref (l, target, pointeeType) ->
         has_heap_effects();
         if pure then static_error l "Cannot write in a pure context." None;
-        let predSymb = pointee_pred_symb l pointeeType in
-        consume_chunk rules h [] [] [] l (predSymb, true) [] real_unit real_unit_pat (Some 1) [TermPat target; dummypat] $. fun _ h _ _ _ _ _ _ ->
-        cont (Chunk ((predSymb, true), [], real_unit, [target; value], None)::h) env
+        consume_points_to_chunk rules h [] [] [] l pointeeType real_unit real_unit_pat target dummypat $. fun _ h _ _ _ _ _ ->
+        produce_points_to_chunk l h pointeeType real_unit target value $. fun h ->
+        cont h env
     in
     let rec execute_assign_op_expr h env lhs get_values cont =
       lhs_to_lvalue h env lhs $. fun h env lvalue ->
@@ -1876,10 +1951,14 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | WFunCall (l, "malloc", [], [Operation (lmul, Mul, ([e; SizeofExpr (ls, te)] | [SizeofExpr (ls, te); e]))]) ->
       if pure then static_error l "Cannot call a non-pure function from a pure context." None;
       let elemTp = check_pure_type (pn,ilist) tparams te in
-      let w = check_expr_t (pn,ilist) tparams tenv e intType in
+      let w, tp = check_expr (pn,ilist) tparams tenv e in
+      begin match tp with
+        Int (_, _) -> ()
+      | _ -> static_error (expr_loc e) "Expression of integer type expected" None
+      end;
       eval_h h env w $. fun h env n ->
       let arraySize = ctxt#mk_mul n (sizeof ls elemTp) in
-      check_overflow lmul int_zero_term arraySize (max_signed_term int_rank) (fun l t -> assert_term t h env l);
+      check_overflow lmul int_zero_term arraySize (max_unsigned_term ptr_rank) (fun l t -> assert_term t h env l);
       let resultType = PtrType elemTp in
       let result = get_unique_var_symb (match xo with None -> "array" | Some x -> x) resultType in
       let cont h = cont h env result in
@@ -2031,7 +2110,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       check_correct h None None [] args (lm, [], rt, xmap, [], pre, post, Some epost, terminates, v) is_upcall (Some supercn) cont
     | WFunCall (l, g, targs, es) ->
       let FuncInfo (funenv, fterm, lg, k, tparams, tr, ps, nonghost_callers_only, pre, pre_tenv, post, terminates, functype_opt, body, fbf, v) = List.assoc g funcmap in
-      if not (startswith g "vf__") then has_heap_effects ();
+      if heapReadonly && language = CLang && not (startswith g "vf__") && asserts_exclusive_ownership pre then has_heap_effects ();
       if body = None then register_prototype_used lg g fterm;
       if pure && k = Regular then static_error l "Cannot call regular functions in a pure context." None;
       if not pure && is_lemma k then static_error l "Cannot call lemma functions in a non-pure context." None;
@@ -2119,7 +2198,7 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       eval_h h env arr $. fun h env arr ->
       eval_h h env i $. fun h env i ->
       cont h env (read_c_array h env l arr i elem_tp)
-    | Deref (l, w, pointeeType) as e ->
+    | WDeref (l, w, pointeeType) as e ->
       lhs_to_lvalue h env e $. fun h env lvalue ->
       read_lvalue h env lvalue cont
     | WOperation (l, Not, [e], t) -> eval_h_core readonly h env e (fun h env v -> cont h env (ctxt#mk_not v))
@@ -2156,10 +2235,13 @@ module VerifyExpr(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       lhs_to_lvalue h env lhs $. fun h env lvalue ->
       let varName = match lhs with WVar (_, x, _) -> Some x | _ -> None in
       let rhsHeapReadOnly =
+        (* 'E = ++E + 1' has undefined behavior. This is true for any lvalue E. *)
+        (* We interpret the C standard as saying that 'E = f(++E)' does not have undefined behavior because argument expression evaluation is sequenced before function call. *)
         match (lhs, rhs) with
           (WVar (_, _, _), WFunCall (_, _, _, _)) -> false (* Is this OK when the variable is a global? *)
         | (WVar (_, _, LocalVar), _) -> false
-        | (WRead (l, WVar (_, _, LocalVar), fparent, fname, tp, false, fvalue, fghost), _) -> false
+        | (WRead (l, WVar (_, _, LocalVar), fparent, fname, tp, false, fvalue, fghost), WFunCall (_, _, _, _)) -> false
+        | (WDeref (l, WVar (_, _, LocalVar), _), WFunCall (_, _, _, _)) -> false
         | _ -> true
       in
       verify_expr (true, rhsHeapReadOnly) h env varName rhs $. fun h env vrhs ->

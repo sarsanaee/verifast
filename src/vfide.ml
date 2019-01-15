@@ -8,16 +8,18 @@ open Verifast
 open GMain
 open Pervasives
 open Shape_analysis_frontend
-
-type platform = Windows | Linux | MacOS
+open Vfconfig
 
 type layout = FourThree | Widescreen
 
-let platform = if Sys.os_type = "Win32" then Windows else if Fonts.is_macos then MacOS else Linux
-
 let include_paths: string list ref = ref []
+let define_macros: string list ref = ref []
 
 let () = Unix.putenv "LANG" "en_US" (* This works around a problem that causes vfide to become unusable in the Chinese locale. *)
+
+let () =
+  if platform = Linux && Sys.getenv_opt "VERIFAST_USE_PLATFORM_GTK_THEME" = None then
+    Unix.putenv "GTK_DATA_PREFIX" "bogus dir" (* See https://github.com/verifast/verifast/issues/147 *)
 
 (* The lablgtk.init has a problem that automatically finding
  * this package does not always work. To avoid that problem,
@@ -101,12 +103,23 @@ let sys cmd =
   if exitStatus <> Unix.WEXITED 0 then failwith (Printf.sprintf "Command '%s' failed with exit status %s" cmd (string_of_process_status exitStatus));
   line
 
+let string_of_time time =
+  let tm = Unix.gmtime time in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d%9f" (tm.tm_year + 1900) (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec (fst (modf time))
+
 let path_last_modification_time path =
   (Unix.stat path).st_mtime
 
 let file_has_changed path mtime =
   try
-    path_last_modification_time path <> mtime
+    let mtime' = path_last_modification_time path in
+    let result = mtime' <> mtime in
+    if result then begin
+      Printf.printf "File '%s' was last read by vfide at '%s' but was modified by another process at '%s'.\n"
+        path (string_of_time mtime) (string_of_time mtime');
+      flush stdout
+    end;
+    result
   with Unix.Unix_error (_, _, _) -> true
 
 let in_channel_last_modification_time chan =
@@ -115,7 +128,7 @@ let in_channel_last_modification_time chan =
 let out_channel_last_modification_time chan =
   (Unix.fstat (Unix.descr_of_out_channel chan)).st_mtime
 
-type tree_node = TreeNode of string * int list * int * int * tree_node list
+type tree_node = TreeNode of node_type * int * int * tree_node list
 
 module TreeMetrics = struct
   let dotWidth = 15
@@ -124,9 +137,9 @@ module TreeMetrics = struct
   let cw = dotWidth + 2 * padding
 end
 
-let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend enforceAnnotations =
-  let leftBranchPixbuf = GdkPixbuf.from_file (default_bindir ^ "/branch-left.png") in
-  let rightBranchPixbuf = GdkPixbuf.from_file (default_bindir ^ "/branch-right.png") in
+let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend enforceAnnotations allowUndeclaredStructTypes dataModel overflowCheck =
+  let leftBranchPixbuf = Branchleft_png.pixbuf () in
+  let rightBranchPixbuf = Branchright_png.pixbuf () in
   let ctxts_lifo = ref None in
   let msg = ref None in
   let url = ref None in
@@ -149,7 +162,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   let traceFont = ref traceFont in
   let scaledTraceFont = ref !traceFont in
   let actionGroup = GAction.action_group ~name:"Actions" () in
-  let disableOverflowCheck = ref false in
+  let disableOverflowCheck = ref (not overflowCheck) in
   let useJavaFrontend = ref false in
   let toggle_java_frontend active =
     (useJavaFrontend := active;
@@ -197,6 +210,38 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     a#set_label "Show _right margin ruler"; ignore $. a#connect#toggled (fun () -> showRightMargin a#get_active);
     a
   in
+  let launch_browser url =
+    match platform with
+      MacOS -> ignore $. Sys.command ("open '" ^ url ^ "'")
+    | Linux -> ignore $. Sys.command ("xdg-open '" ^ url ^ "'")
+    | Windows ->
+      (* The below command asynchronously launches a "cmd" process that launches the help topic.
+         Launching the help topic synchronously seems to cause vfide to hang for between 6 and 30 seconds.
+         My hypothesis is that "cmd /C start xyz.html" performs a DDE broadcast to all windows on the desktop,
+         which apparently blocks until a timeout happens if some window is not responding. If the
+         Help topic is launched synchronously inside the GUI event handler thread, the vfide window is not
+         responsive until the Help topic is launched. Ergo the deadlock.
+         This seems to be confirmed here <http://wiki.tcl.tk/996> and here <http://blogs.msdn.com/b/oldnewthing/archive/2007/02/26/1763683.aspx>.
+      *)
+      ignore $. Unix.create_process "cmd" [| "/C"; "start"; "Dummy Title"; url |] Unix.stdin Unix.stdout Unix.stderr
+  in
+  let showBannerDialog () =
+    let dialog = GWindow.dialog ~title:"About VeriFast" ~parent:root () in
+    dialog#action_area#set_border_width 0;
+    let vbox = dialog#vbox in
+    ignore $. GMisc.label ~xpad:2 ~ypad:2 ~line_wrap:true ~text:(Verifast.banner ()) ~packing:vbox#pack ();
+    ignore $. (GButton.button ~stock:`OK ~packing:dialog#action_area#add ())#connect#clicked (fun () ->
+      dialog#response `DELETE_EVENT
+    );
+    ignore $. (GButton.button ~label:"Launch Homepage" ~packing:dialog#action_area#add ())#connect#clicked (fun () ->
+      launch_browser "https://github.com/verifast/verifast/"
+    );
+    ignore $. (GButton.button ~label:"Show Contributors" ~packing:dialog#action_area#add ())#connect#clicked (fun () ->
+      launch_browser "https://github.com/verifast/verifast/graphs/contributors"
+    );
+    ignore $. dialog#run();
+    dialog#destroy()
+  in
   let _ =
     let a = GAction.add_action in
     GAction.add_actions actionGroup [
@@ -233,7 +278,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       a "BottomWindow" ~label:"Window(_Bottom)";
       a "Stub";
       a "Help" ~label:"_Help";
-      a "About" ~stock:`ABOUT ~callback:(fun _ -> GToolbox.message_box "VeriFast IDE" (Verifast.banner ()))
+      a "About" ~stock:`ABOUT ~callback:(fun _ -> showBannerDialog ())
     ]
   in
   let ui = GAction.ui_manager() in
@@ -323,24 +368,11 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   let messageHBox = GPack.hbox ~packing:(messageToolItem#add) () in
   messageToolItem#set_border_width 3;
   let messageEntry = GEdit.entry ~show:false ~editable:false ~has_frame:false ~packing:(messageHBox#add) () in
+  let messageEntryCheckDone = ref false in
   messageEntry#coerce#misc#modify_font_by_name !scaledTraceFont;
   let helpButton = GButton.button ~show:false ~label:" ? " ~packing:(messageHBox#pack) () in
   let show_help url =
-    if Sys.os_type = "Unix" then
-     if sys "uname" = "Darwin" then
-        ignore (Sys.command ("open " ^ "'" ^ !bindir ^ "/../help/" ^ url ^ ".html" ^ "'"))
-      else
-        ignore (Sys.command ("xdg-open " ^ "'" ^ !bindir ^ "/../help/" ^ url ^ ".html" ^ "'"))
-    else
-      (* The below command asynchronously launches a "cmd" process that launches the help topic.
-         Launching the help topic synchronously seems to cause vfide to hang for between 6 and 30 seconds.
-         My hypothesis is that "cmd /C start xyz.html" performs a DDE broadcast to all windows on the desktop,
-         which apparently blocks until a timeout happens if some window is not responding. If the
-         Help topic is launched synchronously inside the GUI event handler thread, the vfide window is not
-         responsive until the Help topic is launched. Ergo the deadlock.
-         This seems to be confirmed here <http://wiki.tcl.tk/996> and here <http://blogs.msdn.com/b/oldnewthing/archive/2007/02/26/1763683.aspx>.
-      *)
-      ignore (Unix.create_process "cmd" [| "/C"; "start"; "Dummy Title"; !bindir ^ "\\..\\help\\" ^ url ^ ".html" |] Unix.stdin Unix.stdout Unix.stderr)
+    launch_browser (!bindir ^ "/../help/" ^ url ^ ".html")
   in
   ignore (helpButton#connect#clicked (fun () -> (match(!url) with None -> () | Some(url) -> show_help url);));
   toolbar#insert messageToolItem;
@@ -356,36 +388,37 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   treeSeparator#set_position (match layout with FourThree -> 800 | Widescreen -> 1024);
   let executionForest = ref [] in
   let reportExecutionForest forest =
-    let rec findFork (Node (msg, p, ns) as n) =
+    let rec findFork (Node (nodeType, ns) as n) =
       match !ns with
-        [n] -> findFork n
+        [Node (ExecNode _, _) as n] -> findFork n
+      | [n] when nodeType = BranchNode -> findFork n
       | _ -> n
     in
     let rec convert forest =
-      forest |> List.rev |> List.map begin fun (Node (msg, p, ns)) ->
+      forest |> List.rev |> List.map begin fun (Node (nodeType, ns)) ->
         let ns = convert (List.map findFork !ns) in
         let width =
           ns
-            |> List.map (fun (TreeNode (msg, p, width, _, _)) -> width)
+            |> List.map (fun (TreeNode (_, width, _, _)) -> width)
             |> List.fold_left (+) 0
             |> max 1
         in
         let height =
           ns
-            |> List.map (fun (TreeNode (msg, p, width, height, _)) -> height)
+            |> List.map (fun (TreeNode (_, width, height, _)) -> height)
             |> List.fold_left max 0
         in
-        TreeNode (msg, p, width, height + 1, ns)
+        TreeNode (nodeType, width, height + 1, ns)
       end
     in
     executionForest := convert forest;
     treeComboListStore#clear ();
-    !executionForest |> List.iter (fun (TreeNode (msg, _, _, _, _)) -> GEdit.text_combo_add treeComboText msg)
+    !executionForest |> List.iter (fun (TreeNode (ExecNode (msg, _), _, _, _)) -> GEdit.text_combo_add treeComboText msg)
   in
   ignore $. treeCombo#connect#changed begin fun () ->
     let active = treeCombo#active in
     if 0 <= active then begin
-      let TreeNode (msg, p, w, h, ns) = List.nth !executionForest active in
+      let TreeNode (_, w, h, ns) = List.nth !executionForest active in
       let open TreeMetrics in
       treeDrawingArea#set_size ~width:(cw * w) ~height:(cw * h)
     end;
@@ -541,7 +574,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       else if Filename.check_suffix path ".java" || Filename.check_suffix path ".javaspec" then highlight (common_keywords @ java_keywords)
       else ()
   in
-  let create_editor (textNotebook: GPack.notebook) buffer lineMarksTable =
+  let create_editor (textNotebook: GPack.notebook) buffer lineMarksTable stmtExecCountsColumn =
     let textLabel = GMisc.label ~text:"(untitled)" () in
     let textVbox = GPack.vbox ~spacing:2 ~packing:(fun widget -> ignore (textNotebook#append_page ~tab_label:textLabel#coerce widget)) () in
     let textFindBox = GPack.hbox ~show:false ~border_width:2 ~spacing:2 ~packing:(textVbox#pack ~expand:false) () in
@@ -552,6 +585,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
         ~packing:textVbox#add () in
     let srcText = (*GText.view*) GSourceView2.source_view ~source_buffer:buffer ~packing:textScroll#add () in
     lineMarksTable#show_in_source_view srcText;
+    stmtExecCountsColumn#show_in_source_view srcText;
     srcText#misc#modify_font_by_name !scaledCodeFont;
     ignore $. textFindEntry#event#connect#key_press (fun key ->
       if GdkEvent.Key.keyval key = GdkKeysyms._Escape then begin
@@ -596,6 +630,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let path = ref None in
     let buffer = GSourceView2.source_buffer () in
     let lineMarksTable = GLineMarks.table () in
+    let stmtExecCountsColumn = GLineMarks.source_gutter_text_column "99x" 1.0 in
     buffer#begin_not_undoable_action (); (* Disable the source view's undo manager since we handle undos ourselves. *)
     let apply_tag_enabled = ref false in (* To prevent tag copying when pasting from clipboard *)
     ignore $. buffer#connect#apply_tag (fun tag ~start ~stop -> if not !apply_tag_enabled then GtkSignal.emit_stop_by_name buffer#as_buffer "apply-tag");
@@ -609,8 +644,8 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let _ = buffer#create_tag ~name:"currentCaller" [`BACKGROUND "#44FF44"] in
     let currentStepMark = buffer#create_mark (buffer#start_iter) in
     let currentCallerMark = buffer#create_mark (buffer#start_iter) in
-    let mainView = create_editor textNotebook buffer lineMarksTable in
-    let subView = create_editor subNotebook buffer lineMarksTable in
+    let mainView = create_editor textNotebook buffer lineMarksTable stmtExecCountsColumn in
+    let subView = create_editor subNotebook buffer lineMarksTable stmtExecCountsColumn in
     let undoList: undo_action list ref = ref [] in
     let redoList: undo_action list ref = ref [] in
     let eol = ref (if platform = Windows then "\r\n" else "\n") in
@@ -628,6 +663,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       method currentCallerMark = currentCallerMark
       method useSiteTags = useSiteTags
       method lineMarksTable = lineMarksTable
+      method stmtExecCountsColumn = stmtExecCountsColumn
     end in
     ignore $. buffer#connect#modified_changed (fun () ->
       updateBufferTitle tab;
@@ -701,6 +737,10 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       let (backColor, textColor) = if success then ("green", "black") else ("red", "white") in
       messageEntry#coerce#misc#show();
       messageEntry#set_text msg;
+      if not !messageEntryCheckDone then begin
+        messageEntryCheckDone := true;
+        if messageEntry#misc#get_flag `NO_WINDOW then Printf.printf "warning: GtkEntry has flag GTK_NO_WINDOW; error message may not be visible in toolbar\n";
+      end;
       messageEntry#coerce#misc#modify_base [`NORMAL, `NAME backColor];
       messageEntry#coerce#misc#modify_text [`NORMAL, `NAME textColor]);
     (match !url with
@@ -711,15 +751,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   let load tab newPath =
     try
       let chan = open_in_bin newPath in
-      let buf = String.create 60000 in
-      let rec iter () =
-        let count = input chan buf 0 60000 in
-        if count = 0 then [] else
-          let chunk = String.sub buf 0 count in
-          chunk::iter ()
-      in
-      let chunks = iter() in
-      let text = String.concat "" chunks in
+      let text = input_fully chan in
       let mtime = in_channel_last_modification_time chan in
       close_in chan;
       let text = file_to_utf8 text in
@@ -763,8 +795,9 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let text = (tab#buffer: GSourceView2.source_buffer)#get_text () in
     output_string chan (utf8_to_file (convert_eol !(tab#eol) text));
     flush chan;
-    let mtime = out_channel_last_modification_time chan in
+    (* let mtime = out_channel_last_modification_time chan in *)
     close_out chan;
+    let mtime = path_last_modification_time thePath in
     tab#path := Some (thePath, mtime);
     tab#buffer#set_modified false;
     updateBufferTitle tab;
@@ -819,13 +852,15 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let collist = new GTree.column_list in
     let col_k = collist#add Gobject.Data.int in
     let col_text = collist#add Gobject.Data.string in
+    let col_foreground = collist#add Gobject.Data.string in
+    let col_strikethrough = collist#add Gobject.Data.boolean in
     let store = GTree.list_store collist in
     let scrollWin = GBin.scrolled_window ~hpolicy:`AUTOMATIC ~vpolicy:`AUTOMATIC ~shadow_type:`IN () in
     let lb = GTree.view ~model:store ~packing:scrollWin#add () in
     lb#coerce#misc#modify_font_by_name !scaledTraceFont;
-    let col = GTree.view_column ~title:title ~renderer:(GTree.cell_renderer_text [], ["text", col_text]) () in
+    let col = GTree.view_column ~title:title ~renderer:(GTree.cell_renderer_text [], ["text", col_text; "foreground", col_foreground; "strikethrough", (Obj.magic (col_strikethrough: bool GTree.column): string GTree.column)]) () in (* Using Obj.magic to work around the fact that the type of GTree.view_column is more strict than necessary: it incorrectly requires that all columns be of the same type. *)
     let _ = lb#append_column col in
-    (scrollWin, lb, col_k, col_text, col, store)
+    (scrollWin, lb, col_k, col_text, col_foreground, col_strikethrough, col, store)
   in
   let create_assoc_list_box title1 title2 =
     let collist = new GTree.column_list in
@@ -845,9 +880,9 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   in
   let (steplistFrame, stepList, stepDataCol, stepCol, stepViewCol, stepStore) = create_steplistbox in
   let _ = bottomTable#pack1 ~resize:true ~shrink:true (steplistFrame#coerce) in
-  let (assumptionsFrame, assumptionsList, assumptionsKCol, assumptionsCol, _, assumptionsStore) = create_listbox "Assumptions" in
+  let (assumptionsFrame, assumptionsList, assumptionsKCol, assumptionsCol, assumptionsForegroundCol, assumptionsStrikethroughCol, _, assumptionsStore) = create_listbox "Assumptions" in
   let _ = bottomTable2#pack1 ~resize:true ~shrink:true (assumptionsFrame#coerce) in
-  let (chunksFrame, chunksList, chunksKCol, chunksCol, _, chunksStore) = create_listbox "Heap chunks" in
+  let (chunksFrame, chunksList, chunksKCol, chunksCol, chunksForegroundCol, chunksStrikethroughCol, _, chunksStore) = create_listbox "Heap chunks" in
   let _ = bottomTable2#pack2 ~resize:true ~shrink:true (chunksFrame#coerce) in
   let (srcEnvFrame, srcEnvList, srcEnvKCol, srcEnvCol1, srcEnvCol2, _, _, srcEnvStore) = create_assoc_list_box "Local" "Value" in
   let _ = srcPaned#pack2 ~resize:true ~shrink:true (srcEnvFrame#coerce) in
@@ -884,7 +919,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     in
     iter 0 !buffers
   in
-  let create_marks_of_loc ((p1, p2): loc) =
+  let create_marks_of_loc (p1, p2) =
     let (path1, line1, col1) = p1 in
     let (path2, line2, col2) = p2 in
     assert (path1 = path2);
@@ -918,7 +953,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       | Assuming t::cs -> iter lastItem itstack last_it (t::ass) locstack last_loc last_env cs
       | Executing (h, env, l, msg)::cs ->
         let it = stepStore#append ?parent:(match itstack with [] -> None | it::_ -> Some it) () in
-        let l = create_marks_of_loc l in
+        let l = create_marks_of_loc (root_caller_token l) in
         let stepItem = (ass, h, env, l, msg, locstack) in
         stepStore#set ~row:it ~column:stepDataCol stepItem;
         stepStore#set ~row:it ~column:stepCol msg;
@@ -946,14 +981,16 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     in
     stepItems := Some (iter None [] None [] [] None None ctxts_fifo)
   in
-  let append_items (store:GTree.list_store) kcol col items =
+  let append_items (store:GTree.list_store) kcol col foreground_col strikethrough_col items =
     let rec iter k items =
       match items with
         [] -> ()
-      | item::items ->
+      | (item, foreground, strikethrough)::items ->
         let gIter = store#append() in
         store#set ~row:gIter ~column:kcol k;
         store#set ~row:gIter ~column:col item;
+        store#set ~row:gIter ~column:foreground_col foreground;
+        store#set ~row:gIter ~column:strikethrough_col strikethrough;
         iter (k + 1) items
     in
     iter 0 items
@@ -986,7 +1023,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let buffer = tab#buffer in
     apply_tag_by_name tab name ~start:(buffer#get_iter_at_mark (`MARK mark1)) ~stop:(buffer#get_iter_at_mark (`MARK mark2))
   in
-  let apply_tag_by_loc name ((p1, p2): loc) =
+  let apply_tag_by_loc name (p1, p2) =
     let (path1, line1, col1) = p1 in
     let (path2, line2, col2) = p2 in
     assert (path1 = path2);
@@ -1004,6 +1041,24 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let env = List.sort compare_bindings env in
     List.filter (fun entry -> entry <> ("currentThread", "currentThread")) env
   in
+  let rec get_last_visible_descendant (treeView: GTree.view) path =
+    if treeView#row_expanded path then
+      let iter = treeView#model#get_iter path in
+      let n = treeView#model#iter_n_children (Some iter) in
+      let iter = treeView#model#iter_children ~nth:(n - 1) (Some iter) in
+      get_last_visible_descendant treeView (treeView#model#get_path iter)
+    else
+      path
+  in
+  let get_path_of_preceding_visible_row treeView path =
+    let path = GtkTree.TreePath.copy path in
+    if GtkTree.TreePath.prev path then
+      Some (get_last_visible_descendant treeView path)
+    else if GtkTree.TreePath.up path && GtkTree.TreePath.get_depth path > 0 then
+      Some path
+    else
+      None
+  in
   let stepSelected _ =
     match !stepItems with
       None -> ()
@@ -1011,6 +1066,8 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       clearStepInfo();
       let selpath = List.hd stepList#selection#get_selected_rows in
       let (ass, h, env, l, msg, locstack) = get_step_of_path selpath in
+      let prevRowPath = get_path_of_preceding_visible_row stepList selpath in
+      let prevStep = option_map get_step_of_path prevRowPath in
       begin
         match locstack with
           [] ->
@@ -1043,7 +1100,24 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
             append_assoc_items srcEnvStore srcEnvKCol srcEnvCol1 srcEnvCol2 (strings_of_env caller_env)
           end
       end;
-      append_items assumptionsStore assumptionsKCol assumptionsCol (List.rev ass);
+      let unchangedRowColor = "#000000" in
+      let newRowColor = "#00C000" in
+      let deletedRowColor = "#FF0000" in
+      let assRows =
+        match prevStep with
+          None -> List.map (fun s -> (s, unchangedRowColor, false)) ass
+        | Some (ass', _, _, _, _, _) ->
+          let delta = List.length ass - List.length ass' in
+          let rec iter delta ass =
+            if delta = 0 then
+              List.map (fun s -> (s, unchangedRowColor, false)) ass
+            else
+              let s::ass = ass in
+              (s, newRowColor, false)::iter (delta - 1) ass
+          in
+          iter delta ass
+      in
+      append_items assumptionsStore assumptionsKCol assumptionsCol assumptionsForegroundCol assumptionsStrikethroughCol (List.rev assRows);
       let compare_chunks (Chunk ((g, literal), targs, coef, ts, size)) (Chunk ((g', literal'), targs', coef', ts', size')) =
         let r = compare g g' in
         if r <> 0 then r else
@@ -1061,7 +1135,25 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
         if r <> 0 then r else
         compare coef coef'
       in
-      append_items chunksStore chunksKCol chunksCol (List.map string_of_chunk (List.sort compare_chunks h))
+      let chunksRows =
+        let h = List.map string_of_chunk (List.sort compare_chunks h) in
+        match prevStep with
+          None -> List.map (fun c -> (c, unchangedRowColor, false)) h
+        | Some (_, h', _, _, _, _) ->
+          let h' = List.map string_of_chunk (List.sort compare_chunks h') in
+          let rec iter h h' =
+            match h, h' with
+              [], [] -> []
+            | c::h, c'::h' when c = c' ->
+              (c, unchangedRowColor, false)::iter h h'
+            | h, c'::h' when not (List.mem c' h) ->
+              (c', deletedRowColor, true)::iter h h'
+            | c::h, h' ->
+              (c, newRowColor, false)::iter h h'
+          in
+          iter h h'
+      in
+      append_items chunksStore chunksKCol chunksCol chunksForegroundCol chunksStrikethroughCol chunksRows
   in
   let _ = stepList#connect#cursor_changed ~callback:stepSelected in
   let _ = (new GObj.misc_ops stepList#as_widget)#grab_focus() in
@@ -1098,7 +1190,8 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
       stepStore#clear();
       List.iter (fun tab ->
         let buffer = tab#buffer in
-        buffer#remove_tag_by_name "error" ~start:buffer#start_iter ~stop:buffer#end_iter
+        buffer#remove_tag_by_name "error" ~start:buffer#start_iter ~stop:buffer#end_iter;
+        tab#stmtExecCountsColumn#clear
       ) !buffers
     end
   in
@@ -1164,12 +1257,12 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   in
   let handleStaticError l emsg eurl =
     if l <> dummy_loc then
-      apply_tag_by_loc "error" l;
+      apply_tag_by_loc "error" (root_caller_token l);
     msg := Some emsg;
     url := eurl;
     updateMessageEntry(false);
     if l <> dummy_loc then
-      go_to_loc l
+      go_to_loc (root_caller_token l)
   in
   let reportRange kind l =
     apply_tag_by_loc (tag_name_of_range_kind kind) l
@@ -1325,6 +1418,8 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
                 option_disable_overflow_check = !disableOverflowCheck;
                 option_use_java_frontend = !useJavaFrontend;
                 option_enforce_annotations = enforceAnnotations;
+                option_allow_undeclared_struct_types = allowUndeclaredStructTypes;
+                option_data_model = dataModel;
                 option_allow_should_fail = true;
                 option_emit_manifest = false;
                 option_vroots = [crt_vroot default_bindir];
@@ -1334,6 +1429,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
                 option_provides = [];
                 option_keep_provide_files = true;
                 option_include_paths = !include_paths;
+                option_define_macros = !define_macros;
                 option_safe_mode = false;
                 option_header_whitelist = [];
               }
@@ -1349,7 +1445,27 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
                   perform_syntax_highlighting tab tab#buffer#start_iter tab#buffer#end_iter
                 end
               end;
-              let stats = verify_program prover options path reportRange reportUseSite reportExecutionForest breakpoint targetPath in
+              let hasStmts = Array.make 10000 false in
+              let lineCount = ref 0 in
+              let reportStmt ((path', line, _), _) =
+                if path' == path then begin
+                  hasStmts.(line - 1) <- true;
+                  lineCount := max !lineCount line
+                end
+              in
+              let stmtExecCounts = Array.make 10000 0 in
+              let reportStmtExec ((path', line, _), _) =
+                if path' == path then
+                  stmtExecCounts.(line - 1) <- stmtExecCounts.(line - 1) + 1
+              in
+              let stats = verify_program prover options path {reportRange; reportUseSite; reportStmt; reportStmtExec; reportExecutionForest} breakpoint None targetPath in
+              begin
+                let _, tab = get_tab_for_path path in
+                let column = tab#stmtExecCountsColumn in
+                for i = 0 to !lineCount - 1 do
+                  column#add_line (if hasStmts.(i) then Printf.sprintf "%dx" stmtExecCounts.(i) else "")
+                done
+              end;
               let success =
                 if targetPath <> None then
                   (msg := Some("0 errors found (target path not reached)"); false)
@@ -1361,7 +1477,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
               updateMessageEntry(success)
             with
               PreprocessorDivergence (l, emsg) ->
-              handleStaticError l ("Preprocessing error" ^ (if emsg = "" then "." else ": " ^ emsg)) None
+              handleStaticError (Lexed l) ("Preprocessing error" ^ (if emsg = "" then "." else ": " ^ emsg)) None
             | ParseException (l, emsg) ->
               let message = "Parse error" ^ (if emsg = "" then "." else ": " ^ emsg) in
               if (l = Ast.dummy_loc) then begin
@@ -1376,7 +1492,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
               updateMessageEntry(false)
             | StaticError (l, emsg, eurl) ->
               handleStaticError l emsg eurl 
-            | SymbolicExecutionError (ctxts, phi, l, emsg, eurl) ->
+            | SymbolicExecutionError (ctxts, l, emsg, eurl) ->
               ctxts_lifo := Some ctxts;
               updateStepItems();
               ignore $. updateStepListView();
@@ -1384,7 +1500,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
               (* let (ass, h, env, steploc, stepmsg, locstack) = get_step_of_path (get_last_step_path()) in *)
               begin match ctxts with
                 Executing (_, _, steploc, _)::_ when l = steploc ->
-                apply_tag_by_loc "error" l;
+                apply_tag_by_loc "error" (root_caller_token l);
                 msg := Some emsg;
                 url := eurl;
                 updateMessageEntry(false)
@@ -1427,7 +1543,7 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
             (* Save all tabs to disk firsts. Only continue on success. *)
             if not (List.exists sync_with_disk !buffers) then begin
               try begin
-                let new_contents = shape_analyse_frontend path !include_paths (getCursor ()) in
+                let new_contents = shape_analyse_frontend path !include_paths !define_macros (getCursor ()) in
                 let buffer = tab#buffer in
                 buffer#set_text new_contents;
                 (* syntax highlighting gets updated automatically *)
@@ -1448,10 +1564,30 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
     let open TreeMetrics in
     ignore $. treeDrawingArea#event#connect#expose begin fun event ->
       let d = new GDraw.drawable treeDrawingArea#misc#window in
-      let rec drawNode x y (TreeNode (msg, p, w, h, ns)) =
+      let delayedCommands = ref [] in
+      let performDelayed f = delayedCommands := f::!delayedCommands in
+      let rec drawNode x y (TreeNode (nodeType, w, h, ns)) =
         let px = x + cw * w / 2 in
         let py = y + cw / 2 in
-        d#arc ~x:(px - dotWidth / 2) ~y:(py - dotWidth / 2) ~width:dotWidth ~height:dotWidth ~filled:true ();
+        let (outlineColor, fillColor) =
+          match nodeType with
+            ExecNode _ -> None, `BLACK
+          | BranchNode -> if ns = [] then Some `BLACK, `NAME "lightgray" else None, `NAME "darkgray"
+          | SuccessNode -> None, `NAME "green"
+          | ErrorNode -> None, `NAME "red"
+        in
+        performDelayed begin fun () ->
+          d#set_foreground fillColor;
+          let x = px - dotWidth / 2 in
+          let y = py - dotWidth / 2 in
+          d#arc ~x ~y ~width:dotWidth ~height:dotWidth ~filled:true ();
+          begin match outlineColor with
+            None -> ()
+          | Some outlineColor ->
+            d#set_foreground outlineColor;
+            d#arc ~x ~y ~width:dotWidth ~height:dotWidth ~filled:false ()
+          end
+        end;
         let rec drawChildren x y ns =
           match ns with
             [] -> ()
@@ -1463,24 +1599,31 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
         drawChildren x (y + cw) ns;
         (w, px, py)
       in
+      let drawTree tree =
+        ignore $. drawNode 0 0 tree;
+        !delayedCommands |> List.iter (fun f -> f ())
+      in
       let active = treeCombo#active in
-      if 0 <= active then ignore $. drawNode 0 0 (List.nth !executionForest active);
+      if 0 <= active then drawTree (List.nth !executionForest active);
       true
     end;
     treeDrawingArea#event#add [`BUTTON_PRESS; `BUTTON_RELEASE];
     ignore $. treeDrawingArea#event#connect#button_release begin fun event ->
       let bx, by = int_of_float (GdkEvent.Button.x event), int_of_float (GdkEvent.Button.y event) in
-      let rec hitTest x y (TreeNode (msg, p, w, h, ns)) =
+      let rec hitTest x y (TreeNode (nodeType, w, h, ns)) =
         if by < y + cw then begin
           let px = x + cw * w / 2 in
           let py = y + cw / 2 in
           if abs (by - py) <= dotRadius && abs (bx - px) <= dotRadius then
-            verifyProgram false (Some p) ()
+            begin match nodeType with
+              ExecNode (msg, p) -> verifyProgram false (Some p) ()
+            | _ -> ()
+            end
         end else begin
           let rec testChildren x y ns =
             match ns with
               [] -> ()
-            | (TreeNode (msg, p, w, _, _) as n)::ns ->
+            | (TreeNode (_, w, _, _) as n)::ns ->
               if bx < x + cw * w then
                 hitTest x y n
               else
@@ -1661,18 +1804,26 @@ let show_ide initialPath prover codeFont traceFont runtime layout javaFrontend e
   ignore $. Glib.Idle.add (fun () -> textPaned#set_position 0; false);
   GMain.main()
 
+let (code_font, trace_font) =
+  match platform with
+    MacOS -> ("Courier 12", "Sans 12")
+  | _ -> ("Monospace 10", "Sans 8")
+
 let () =
   let path = ref None in
-  let prover = ref None in
-  let codeFont = ref Fonts.code_font in
-  let traceFont = ref Fonts.trace_font in
+  let prover = ref default_prover in
+  let codeFont = ref code_font in
+  let traceFont = ref trace_font in
   let runtime = ref None in
   let layout = ref FourThree in
   let javaFrontend = ref false in
   let enforceAnnotations = ref false in
+  let allowUndeclaredStructTypes = ref false in
+  let overflow_check = ref true in
+  let data_model = ref data_model_32bit in
   let rec iter args =
     match args with
-      "-prover"::arg::args -> prover := Some arg; iter args
+      "-prover"::arg::args -> prover := arg; iter args
     | "-codeFont"::arg::args -> codeFont := arg; iter args
     | "-traceFont"::arg::args -> traceFont := arg; iter args
     | "-runtime"::arg::args -> runtime := Some arg; iter args
@@ -1680,18 +1831,38 @@ let () =
     | "-I"::arg::args -> ( match (Some arg) with
        None -> ( ) | Some arg -> include_paths := arg :: !include_paths);
        iter args
+    | "-D"::arg::args -> ( match (Some arg) with
+       None -> ( ) | Some arg -> define_macros := arg :: !define_macros);
+       iter args
     | "-layout"::"fourthree"::args -> layout := FourThree; iter args
     | "-layout"::"widescreen"::args -> layout := Widescreen; iter args
     | "-javac"::args -> javaFrontend := true; iter args
     | "-enforce_annotations"::args -> enforceAnnotations := true; iter args
+    | "-allow_undeclared_struct_types"::args -> allowUndeclaredStructTypes := true; iter args
+    | "-target"::target::args -> data_model := data_model_of_string target; iter args
+    | "-disable_overflow_check"::args -> overflow_check := false; iter args
     | arg::args when not (startswith arg "-") -> path := Some arg; iter args
-    | [] -> show_ide !path !prover !codeFont !traceFont !runtime !layout !javaFrontend !enforceAnnotations
+    | [] -> show_ide !path !prover !codeFont !traceFont !runtime !layout !javaFrontend !enforceAnnotations !allowUndeclaredStructTypes !data_model !overflow_check
     | _ ->
+      let options = [
+        "-prover prover    (" ^ list_provers () ^ ")";
+        "-codeFont fontSpec";
+        "-traceFont fontSpec";
+        "-I IncludeDir";
+        "-D DefineName";
+        "-layout fourthree|widescreen";
+        "-javac";
+        "-runtime";
+        "-bindir";
+        "-enforce_annotations";
+        "-disable_overflow_check";
+        "-target target    (supported targets: " ^ String.concat ", " (List.map fst data_models) ^ ")"
+      ] in
       GToolbox.message_box "VeriFast IDE" begin
         "Invalid command line.\n\n" ^ 
-        "Usage: vfide [filepath] [-prover z3|redux] [-codeFont fontSpec] " ^
-        "[-traceFont fontSpec] [-I IncludeDir] [-layout fourthree|widescreen] " ^
-        "[-javac] "
+        "Usage: vfide [options] [filepath]\n\n" ^
+        "Options:\n" ^
+        String.concat "" (List.map (fun opt -> "  " ^ opt ^ "\n") options)
       end
   in
   let args = 

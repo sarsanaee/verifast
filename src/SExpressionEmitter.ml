@@ -63,11 +63,12 @@ let rec sexpr_of_type_ (t : type_) : sexpression =
   match t with
     | Bool                    -> aux2 "type-bool"
     | Void                    -> aux2 "type-void"
-    | Int (Signed, 4)         -> aux2 "type-int"
-    | Int (Signed, 2)         -> aux2 "type-short"
-    | Int (Unsigned, 4)       -> aux2 "type-uint-ptr"
+    | Int (Signed, n)         -> aux2 ("type-int" ^ string_of_int (n * 8))
+    | Int (Unsigned, n)       -> aux2 ("type-uint" ^ string_of_int (n * 8))
     | RealType                -> aux2 "type-real"
-    | Int (Signed, 1)         -> aux2 "type-char"
+    | Float                   -> aux2 "type-float"
+    | Double                  -> aux2 "type-double"
+    | LongDouble              -> aux2 "type-long-double"
     | StructType s            -> List [ Symbol "type-struct"; Symbol s ]
     | PtrType t               -> List [ Symbol "type-pointer-to"; sexpr_of_type_ t ]
     | FuncType s              -> List [ Symbol "type-function"; Symbol s ]
@@ -88,6 +89,9 @@ let rec sexpr_of_type_ (t : type_) : sexpression =
                                         Symbol s ]
     | ArrayType (t)           -> List [ Symbol "type-array-type";
                                         sexpr_of_type_ t ]
+    | StaticArrayType (t, n)  -> List [ Symbol "type-static-array-type";
+                                        sexpr_of_type_ t;
+                                        Number (Big_int.big_int_of_int n) ]
     | BoxIdType               -> aux2 "type-box-id"
     | HandleIdType            -> aux2 "type-handle-id-type"
     | AnyType                 -> aux2 "AnyType"
@@ -101,11 +105,13 @@ let rec sexpr_of_type_ (t : type_) : sexpression =
                                         Symbol s ]
     | RefType (t)             -> List [ Symbol "type-ref-type";
                                         sexpr_of_type_ t ]
+    | AbstractType (s)         -> List [ Symbol "type-abstract";
+                                        Symbol s ]
 
 let rec sexpr_of_type_expr : type_expr -> sexpression = function
-  | StructTypeExpr (_, name)  -> 
+  | StructTypeExpr (_, name, _)  -> 
     List [ Symbol "type-expr-struct"
-         ; Symbol name ]
+         ; sexpr_of_option (fun s -> Symbol s) name ]
   | PtrTypeExpr (_, te) -> 
     List [ Symbol "type-expr-pointer-to"
          ; sexpr_of_type_expr te ]
@@ -199,11 +205,11 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
       build_list [ Symbol "expr-op"
                  ; sexpr_of_operator op ]
                  [ "operands", List (List.map sexpr_of_expr exprs) ]
-    | WOperation (loc, op, exprs, types) -> 
+    | WOperation (loc, op, exprs, type_) -> 
       build_list [ Symbol "expr-wop"
                  ; sexpr_of_operator op ]
                  [ "operands", List (List.map sexpr_of_expr exprs)
-                 ; "types", List (List.map sexpr_of_type_ types) ]
+                 ; "type", sexpr_of_type_ type_ ]
     | CallExpr (loc, name, targs, indices, args, binding) ->
       build_list [ Symbol "expr-call"
                  ; Symbol name ]
@@ -227,10 +233,14 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
       List [ Symbol "expr-read"
            ; sexpr_of_expr expr
            ; Symbol str ]
-    | IntLit (loc, n) ->
+    | IntLit (loc, n, is_decimal, usuffix, lsuffix) ->
       build_list [ Symbol "expr-int"
                   ; Number n ]
                  [] 
+    | WIntLit (loc, n) ->
+      build_list [ Symbol "expr-wintlit"
+                  ; Number n ]
+                 []
     | AssignExpr (loc, lhs, rhs) ->
       List [ Symbol "expr-assign"
            ; sexpr_of_expr lhs
@@ -256,6 +266,13 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
                  ; "stat", sexpr_of_bool stat
                  ; "cons", sexpr_of_option (sexpr_of_option sexpr_of_constant_value) !cons
                  ; "ghost", sexpr_of_ghostness ghost ]
+    | WReadInductiveField (loc, e, i, c, f, targs) ->
+      build_list [ Symbol "expr-wreadinductivefield" ]
+                 [ "e", sexpr_of_expr e
+                 ; "ind", Symbol i
+                 ; "ctor", Symbol c
+                 ; "field", Symbol f
+                 ; "targs", sexpr_of_list sexpr_of_type_ targs ]
     | ReadArray (_, rhs, lhs) ->
       build_list [ Symbol "expr-read-array" ]
                  [ "lhs", sexpr_of_expr lhs
@@ -265,10 +282,13 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
                  [ "lhs", sexpr_of_expr lhs
                  ; "t", sexpr_of_type_ t
                  ; "rhs", sexpr_of_expr rhs]
-    | Deref (_, e, t) ->
+    | Deref (_, e) ->
       build_list [ Symbol "expr-deref" ]
+                 [ "e", sexpr_of_expr e]
+    | WDeref (_, e, t) ->
+      build_list [ Symbol "expr-w-deref" ]
                  [ "e", sexpr_of_expr e
-                 ; "t", sexpr_of_option sexpr_of_type_ !t]
+                 ; "t", sexpr_of_type_ t]
     | ExprCallExpr (_, expr, args) ->
       build_list [ Symbol "expr-call-expr" ]
                  [ "expr", sexpr_of_expr expr
@@ -314,7 +334,7 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
                  [ "cond", sexpr_of_expr c
                  ; "e1", sexpr_of_expr e1
                  ; "e2", sexpr_of_expr e2 ]
-    | SwitchExpr (_, cond, clauses, default, _) ->
+    | SwitchExpr (_, cond, clauses, default) ->
       build_list [ Symbol "expr-switch" ]
                  [ "cond", sexpr_of_expr cond
                  ; "clauses", sexpr_of_list sexpr_of_switch_clause clauses
@@ -322,7 +342,10 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
     | PredNameExpr (_, name) ->
        List [ Symbol "expr-pred-name"
             ; Symbol name ]
-    | CastExpr (_, trunc, texpr, expr) ->
+    | TruncatingExpr (_, expr) ->
+      build_list [ Symbol "expr-truncating" ]
+                 [ "expr", sexpr_of_expr expr ]
+    | CastExpr (_, texpr, expr) ->
       build_list [ Symbol "expr-cast" ]
                  [ "typ", sexpr_of_type_expr texpr 
                  ; "expr", sexpr_of_expr expr ]
@@ -363,7 +386,7 @@ let rec sexpr_of_expr (expr : expr) : sexpression =
       build_list [ Symbol "expr-super-call" ]
                  [ "name", Symbol name 
                  ; "params", sexpr_of_list sexpr_of_expr params ]
-    | WSuperMethodCall (_, name, params, _) ->
+    | WSuperMethodCall (_, _, name, params, _) ->
       build_list [ Symbol "expr-w-super-call" ]
                  [ "name", Symbol name 
                  ; "params", sexpr_of_list sexpr_of_expr params ]
@@ -398,9 +421,9 @@ let rec sexpr_of_pred (asn : asn) : sexpression =
            ; sexpr_of_expr expr
            ; sexpr_of_pred thenp
            ; sexpr_of_pred elsep ]
-    | PredAsn (loc, predref, types, indices, patterns) ->
+    | PredAsn (loc, p, types, indices, patterns) ->
       build_list [ Symbol "pred-call-predicate"
-                 ; Symbol predref#name ]
+                 ; Symbol p ]
                  [ "types", List (List.map sexpr_of_type_expr types)
                  ; "indices", List (List.map sexpr_of_pat indices)
                  ; "arguments", List (List.map sexpr_of_pat patterns) ]
@@ -674,6 +697,11 @@ and sexpr_of_decl (decl : decl) : sexpression =
     | EnumDecl _                  -> unsupported "EnumDecl"
     | Global _                    -> unsupported "Global"
     | UnloadableModuleDecl _      -> unsupported "UnloadableModuleDecl"
+    | TypedefDecl (_, te, str)    ->
+      build_list [ Symbol "typedef"
+                 ; Symbol str]
+                 [ "synonim-type", sexpr_of_type_expr te ]
+    | _ -> unsupported "WTF??"
 
 and sexpr_of_argument (type_, name) =
   Symbol (name ^ " with type " ^ (string_of_sexpression(sexpr_of_type_expr type_)))
@@ -697,12 +725,12 @@ and sexpr_of_meths (meth : meth) : sexpression =
     let body =
       match body with
         | None           -> [ ]
-        | Some (body, _) -> [ "body", List (List.map sexpr_of_stmt body) ]
+        | Some ((body, _), _) -> [ "body", List (List.map sexpr_of_stmt body) ]
     in
     let contract =
       match contract with
         | None -> []
-        | Some (pre, post,_) -> [ "precondition", sexpr_of_pred pre
+        | Some (pre, post,_,_) -> [ "precondition", sexpr_of_pred pre
                                 ; "postcondition", sexpr_of_pred post ] 
     in        
     let kw = List.concat [ [ "ghos", sexpr_of_ghostness ghost
@@ -722,13 +750,13 @@ and sexpr_of_constructor (name : string) (cons : cons) : sexpression =
     let body =
       match body with
         | None           -> [ ]
-        | Some (body, _) -> [ "body", List (List.map sexpr_of_stmt body) ]
+        | Some ((body, _), _) -> [ "body", List (List.map sexpr_of_stmt body) ]
     in
     let contract =
       match contract with
         | None -> []
-        | Some (pre, post,_) -> [ "precondition", sexpr_of_pred pre
-                                ; "postcondition", sexpr_of_pred post ] 
+        | Some (pre, post, _, _) -> [ "precondition", sexpr_of_pred pre
+                                    ; "postcondition", sexpr_of_pred post ] 
     in        
     let kw = List.concat [ [ "parameters", List (List.map sexpr_of_arg params) ]
                           ; body

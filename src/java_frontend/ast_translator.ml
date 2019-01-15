@@ -63,23 +63,24 @@ let error l m =
 let translate_location l =
   match l with 
   | GEN.NoSource -> dummy_loc
-  | GEN.SourceLine(f, l, c1 ,c2) -> ((f, l, c1), (f, l, c2))
-  | GEN.SourceLines(f, l1, c1, l2 ,c2) -> ((f, l1, c1), (f, l2, c2))
+  | GEN.SourceLine(f, l, c1 ,c2) -> Lexed ((f, l, c1), (f, l, c2))
+  | GEN.SourceLines(f, l1, c1, l2 ,c2) -> Lexed ((f, l1, c1), (f, l2, c2))
 
 (* ------------------------------------------------ *)
 (* Parsing of annotations using the VeriFast parser *)
 (* ------------------------------------------------ *)
 
 let annotations : (string, string list) Hashtbl.t ref = ref (Hashtbl.create 1)
-let report_range : (Lexer.range_kind -> Ast.loc -> unit) ref = ref (fun _ _ -> ())
-let report_should_fail : (Ast.loc -> unit) ref = ref (fun _ -> ())
+let report_range : (Lexer.range_kind -> Ast.loc0 -> unit) ref = ref (fun _ _ -> ())
+let report_should_fail : (Ast.loc0 -> unit) ref = ref (fun _ -> ())
 let enforce_annotations : bool ref = ref false
+
+module JavaParser = Parser.Parser (struct let language = Java let enforce_annotations = true let data_model = data_model_java end)
 
 (* this function creates a lexer for each of 
    the annotations and composes them before
    passing the resulting stream to the parser *)
 let parse_pure_decls_core loc used_parser anns lookup =
-  Parser.set_language Java;
   if (List.length anns < 1) then
     error loc "Parsing failed due to missing annotations";
   let (loc, token_stream) =
@@ -102,7 +103,7 @@ let parse_pure_decls_core loc used_parser anns lookup =
         let a = Str.global_replace (Str.regexp "\\\\\"") "\"" a in
         debug_print (Printf.sprintf "Handling annotation \n%s\n" a);
         begin
-          let (srcpos1, _) = translate_location l in
+          let Lexed (srcpos1, _) = translate_location l in
           let annotChar = '*' in (*No nested annotations allowed, so no problem. JDK takes care of annotation char*)
           let (loc, _, token_stream, _, _) =
             Lexer.make_lexer_core (Parser.common_keywords @ Parser.java_keywords) 
@@ -134,10 +135,10 @@ let parse_pure_decls_core loc used_parser anns lookup =
     (current_loc, stream)
   in
   try
-    used_parser token_stream
+    used_parser (Parser.noop_preprocessor token_stream)
   with
-    Lexer.Stream.Error msg -> error (loc()) msg
-  | Lexer.Stream.Failure -> error (loc()) "Parse error"
+    Lexer.Stream.Error msg -> error (Lexed (loc())) msg
+  | Lexer.Stream.Failure -> error (Lexed (loc())) "Parse error"
 
 let parse_ghost_import loc anns lookup =
   let parse_ghost_import_eof = parser 
@@ -148,7 +149,7 @@ let parse_ghost_import loc anns lookup =
 
 let parse_pure_decls loc anns lookup =
   let parser_pure_decls_eof = parser 
-    [< ds = Parser.parse_decls VF.Java ~inGhostHeader:true true;
+    [< ds = Parser.parse_decls VF.Java data_model_java ~inGhostHeader:true true;
       _ = Lexer.Stream.empty >] -> ds
   in
   parse_pure_decls_core loc parser_pure_decls_eof anns lookup
@@ -160,27 +161,27 @@ let parse_pure_decls_try anns lookup =
 
 let parse_postcondition loc anns lookup =
   let parser_postcondition_eof = parser 
-    [< '(_, Lexer.Kwd "ensures"); post = Parser.parse_pred; '(_, Lexer.Kwd ";"); 
+    [< '(_, Lexer.Kwd "ensures"); post = JavaParser.parse_asn; '(_, Lexer.Kwd ";"); 
        _ = Lexer.Stream.empty >] -> post
   in
   parse_pure_decls_core loc parser_postcondition_eof anns lookup
 
 let parse_contract loc anns lookup =
   let parse_contract_eof = parser 
-    [< s = Parser.parse_spec; _ = Lexer.Stream.empty >] -> s
+    [< s = JavaParser.parse_spec; _ = Lexer.Stream.empty >] -> s
   in
   parse_pure_decls_core loc parse_contract_eof anns lookup
   
 let parse_ghost_members loc classname ann =
   let rec parse_ghost_members_eof = parser
   | [< _ = Lexer.Stream.empty >] -> []
-  | [< m = Parser.parse_ghost_java_member classname; mems = parse_ghost_members_eof >] -> m::mems
+  | [< m = JavaParser.parse_ghost_java_member classname; mems = parse_ghost_members_eof >] -> m::mems
   in
   parse_pure_decls_core loc parse_ghost_members_eof [ann] false
 
 let parse_pure_statement loc ann lookup =
   let parse_pure_statement_eof = parser
-    [< s = Parser.parse_stmt0; _ = Lexer.Stream.empty >] -> PureStmt (loc, s)
+    [< s = JavaParser.parse_stmt0; _ = Lexer.Stream.empty >] -> PureStmt (loc, s)
   in
   parse_pure_decls_core loc parse_pure_statement_eof [ann] lookup
 
@@ -190,11 +191,11 @@ let parse_loop_invar loc anns lookup =
       inv =
         Parser.opt
           begin parser
-          | [< '(_, Lexer.Kwd "requires"); pre = Parser.parse_pred; '(_, Lexer.Kwd ";");
-              '(_, Lexer.Kwd "ensures"); post = Parser.parse_pred; '(_, Lexer.Kwd ";") >] -> VF.LoopSpec (pre, post)
-          | [< '(_, Lexer.Kwd "invariant"); p = Parser.parse_pred; '(_, Lexer.Kwd ";"); >] -> VF.LoopInv p
+          | [< '(_, Lexer.Kwd "requires"); pre = JavaParser.parse_asn; '(_, Lexer.Kwd ";");
+              '(_, Lexer.Kwd "ensures"); post = JavaParser.parse_asn; '(_, Lexer.Kwd ";") >] -> VF.LoopSpec (pre, post)
+          | [< '(_, Lexer.Kwd "invariant"); p = JavaParser.parse_asn; '(_, Lexer.Kwd ";"); >] -> VF.LoopInv p
           end;
-      dec = Parser.opt (parser [< '(_, Lexer.Kwd "decreases"); decr = Parser.parse_expr; '(_, Lexer.Kwd ";"); >] -> decr)
+      dec = Parser.opt (parser [< '(_, Lexer.Kwd "decreases"); decr = JavaParser.parse_expr; '(_, Lexer.Kwd ";"); >] -> decr)
     >] -> (inv, dec)
   in
   parse_pure_decls_core loc parse_loop_invar_eof anns lookup
@@ -373,17 +374,24 @@ and translate_staticness stat =
   | GEN.Static -> VF.Static
   | GEN.NonStatic -> VF.Instance
 
+and next_body_rank =
+  let counter = ref 0 in
+  fun () -> incr counter; !counter
+
 and translate_block l stmts =
   let l'= translate_location l in
   match stmts with
     Some stmts -> 
       begin
         let stmt' = translate_statements_as_block l' stmts in
-        match stmt' with
-        | VF.BlockStmt(l1, ds, VF.SuperConstructorCall(l2, exprs)::stms'', l3, _) -> 
-          Some ([VF.SuperConstructorCall(l2, exprs); 
-               VF.BlockStmt(l1, ds, stms'', l3, ref [])], l')
-        | _ -> Some ([stmt'], l')
+        let stmts' =
+          match stmt' with
+          | VF.BlockStmt(l1, ds, VF.SuperConstructorCall(l2, exprs)::stms'', l3, _) -> 
+            [VF.SuperConstructorCall(l2, exprs); 
+             VF.BlockStmt(l1, ds, stms'', l3, ref [])]
+          | _ -> [stmt']
+        in 
+        Some ((stmts', l'), next_body_rank ())
       end
   | None -> None
 
@@ -441,7 +449,6 @@ and check_contract l anns throws generate =
       anns
   in
   let (pre', post', terminates') = parse_contract l' anns' false in
-  if terminates' then error l' "'terminates' clauses are not yet supported.";
   let throws' = 
     List.map 
       (fun (t, c) -> 
@@ -459,7 +466,7 @@ and check_contract l anns throws generate =
       )      
     throws
   in
-  Some(pre', post', throws')
+  Some(pre', post', throws', terminates')
 
 and translate_methods cn decls = 
   debug_print "translate_methods";
@@ -578,17 +585,13 @@ and translate_prim_type typ =
   match typ with
   | GEN.VoidType l -> VF.ManifestTypeExpr(translate_location l, VF.Void)
   | GEN.BoolType l -> VF.ManifestTypeExpr(translate_location l, VF.Bool)
-  | GEN.CharType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 1))
-  (* TODO fix type here *)
-  | GEN.ByteType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 1))
-  | GEN.ShortType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 2))
-  | GEN.IntType l -> VF.ManifestTypeExpr(translate_location l, VF.intType)
-  (* TODO fix type here *)
-  | GEN.LongType l -> VF.ManifestTypeExpr(translate_location l, VF.intType)
-  (* TODO fix type here *)
-  | GEN.FloatType l -> VF.ManifestTypeExpr(translate_location l, VF.RealType)
-  (* TODO fix type here *)
-  | GEN.DoubleType l -> VF.ManifestTypeExpr(translate_location l, VF.RealType)
+  | GEN.CharType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Unsigned, 1))
+  | GEN.ByteType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 0))
+  | GEN.ShortType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 1))
+  | GEN.IntType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 2))
+  | GEN.LongType l -> VF.ManifestTypeExpr(translate_location l, VF.Int (VF.Signed, 3))
+  | GEN.FloatType l -> VF.ManifestTypeExpr(translate_location l, VF.Float)
+  | GEN.DoubleType l -> VF.ManifestTypeExpr(translate_location l, VF.Double)
 
 and translate_ref_type typ = 
   debug_print "translate_ref_type";
@@ -626,7 +629,7 @@ and add_casts_in_method_call arg_types exprs l =
       let t = translate_type t in
       let e' =
         let l_e = expr_loc e in
-        CastExpr(l_e, false, t, e)
+        CastExpr(l_e, t, e)
       in
       e'::(iter(exprs, arg_types))
     | ([], []) -> []
@@ -852,7 +855,7 @@ and translate_expression expr =
       let l' = translate_location l in
       let typ' = translate_type typ in
       let expr' = translate_expression expr in
-      VF.CastExpr(l', false, typ', expr')
+      VF.CastExpr(l', typ', expr')
   | GEN.Literal(l, typ, value) ->
       translate_literal l typ value 
   | GEN.ArrayAccess(l, expr1, expr2) ->
@@ -886,15 +889,15 @@ and translate_bin_operator op l =
 
 and translate_uni_operator op l expr =
   debug_print "uni_operator";
-  let unit_big_int = VF.IntLit(l, Big_int.big_int_of_int (1)) in
+  let intlit n = VF.IntLit(l, Big_int.big_int_of_int n, true, false, NoLSuffix) in
   match op with
   | GEN.O_Not     -> VF.Operation(l, VF.Eq, [VF.False(l); expr])
   | GEN.O_Pos     -> expr
-  | GEN.O_Neg     -> VF.Operation(l, VF.Mul, [VF.IntLit(l, Big_int.big_int_of_int (-1)); expr])
-  | GEN.O_PreInc  -> VF.AssignOpExpr(l, expr, Add, unit_big_int, false)
-  | GEN.O_PreDec  -> VF.AssignOpExpr(l, expr, Sub, unit_big_int, false)
-  | GEN.O_PostInc -> VF.AssignOpExpr(l, expr, Add, unit_big_int, true)
-  | GEN.O_PostDec -> VF.AssignOpExpr(l, expr, Sub, unit_big_int, true)
+  | GEN.O_Neg     -> VF.Operation(l, VF.Sub, [intlit 0; expr])
+  | GEN.O_PreInc  -> VF.AssignOpExpr(l, expr, Add, intlit 1, false)
+  | GEN.O_PreDec  -> VF.AssignOpExpr(l, expr, Sub, intlit 1, false)
+  | GEN.O_PostInc -> VF.AssignOpExpr(l, expr, Add, intlit 1, true)
+  | GEN.O_PostDec -> VF.AssignOpExpr(l, expr, Sub, intlit 1, true)
   | GEN.O_Compl   -> VF.Operation(l, VF.BitNot, [expr])
 
 and translate_literal l typ value =
@@ -913,19 +916,19 @@ and translate_literal l typ value =
         (* TODO: support all sizes of integers*)
         | GEN.CharType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.ByteType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.ShortType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.IntType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, NoLSuffix)
         | GEN.LongType(l) ->
             let l' = translate_location l in
-            VF.IntLit(l', Big_int.big_int_of_string value)
+            VF.IntLit(l', Big_int.big_int_of_string value, true, false, LSuffix)
         | GEN.FloatType(l) ->
             let l' = translate_location l in
             error l' "floats not supported yet"

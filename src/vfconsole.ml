@@ -5,37 +5,118 @@ open Verifast0
 open Verifast
 open Arg
 
+let dump_context_to_file file ctxts termnode_to_string =
+  let outfile = open_out_gen [Open_creat; Open_text; Open_append] 0o640 file in
+  let last_exec = List.find (function | Executing _ -> true | _ -> false) ctxts in
+  output_string outfile "\n--[another execution]--{\n";
+  begin
+    match last_exec with
+    | (Executing (hp, env, _, str)) ->
+      begin
+        List.iter (fun (var,value) ->
+            output_string outfile ("(" ^ var ^ " = " ^ (termnode_to_string value) ^ ")\n")) env;
+        List.iter (function Chunk ((g, literal), targs, coef, ts, size) ->
+            (* print_endline (string_of_chunk (Chunk ((g, literal), targs, coef, ts, size))); *)
+            output_string outfile ("(" ^ (termnode_to_string g) ^ "(");
+            output_string outfile (String.concat ", " (List.map termnode_to_string ts));
+            output_string outfile "))\n";
+          ) hp
+      end
+    | _ -> failwith " no exec "
+  end ;
+  List.iter (function
+      | Assuming tn -> output_string outfile ("(" ^ (termnode_to_string tn) ^ ")\n")
+      | _ -> ()) ctxts;
+  output_string outfile "\n}\n";
+  flush outfile;
+  close_out outfile
+
 let _ =
   let print_msg l msg =
     print_endline (string_of_loc l ^ ": " ^ msg)
   in
-  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string option) (path : string) (emitHighlightedSourceFiles : bool) =
+  let verify ?(emitter_callback = fun _ -> ()) (print_stats : bool) (options : options) (prover : string) (path : string)
+      (breakpoint_lino : int option) (context_export_file : string option) (export_lino : int option) (emitHighlightedSourceFiles : bool)  (dumpPerLineStmtExecCounts : bool) =
     let verify range_callback =
     let exit l =
       Java_frontend_bridge.unload();
       exit l
     in
     try
-      let use_site_callback declKind declLoc useSiteLoc = () in
-      let stats = verify_program ~emitter_callback:emitter_callback prover options path range_callback use_site_callback (fun _ -> ()) None None in
+      let reportStmt, reportStmtExec, dumpPerLineStmtExecCounts =
+        if dumpPerLineStmtExecCounts then
+          let hasStmts = Array.make 10000 false in
+          let counts = Array.make 10000 0 in
+          let reportStmt l =
+            let ((lpath, line, col), _) = l in
+            let line = line - 1 in
+            if lpath == path then
+              hasStmts.(line) <- true
+          in
+          let reportStmtExec l =
+            let ((lpath, line, col), _) = l in
+            let line = line - 1 in
+            if lpath == path then
+              counts.(line) <- counts.(line) + 1
+          in
+          let dumpPerLineStmtExecCounts () =
+            let text = readFile path in
+            let lines = String.split_on_char '\n' text in
+            let rec iter k lines =
+              match lines with
+                [] -> ()
+              | line::lines ->
+                if hasStmts.(k) then
+                  Printf.printf "%5dx %s\n" counts.(k) line
+                else
+                  Printf.printf "       %s\n" line;
+                iter (k + 1) lines
+            in
+            iter 0 lines
+          in
+          reportStmt, reportStmtExec, dumpPerLineStmtExecCounts
+        else
+          (fun _ -> ()), (fun _ -> ()), (fun _ -> ())
+      in
+      let callbacks = {Verifast1.noop_callbacks with reportRange=range_callback; reportStmt; reportStmtExec} in
+      let my_breakpoint = match breakpoint_lino with | Some lino -> Some (path,lino) | None -> None in
+      let my_exportpoint =
+        match export_lino with
+        | Some lino ->
+          let expfname = match context_export_file with
+            | Some fname -> fname
+            | None -> failwith "must supply also export file"
+          in
+          close_out (open_out expfname);
+          Some ((
+              object
+                method run: 'termnode. 'termnode context list ->
+                  ('termnode -> string) -> unit =
+                  dump_context_to_file expfname
+              end),
+                path,lino)
+        | None -> None
+      in
+      let stats = verify_program ~emitter_callback:emitter_callback prover options path callbacks
+          my_breakpoint my_exportpoint None in
+      dumpPerLineStmtExecCounts ();
       if print_stats then stats#printStats;
       print_endline ("0 errors found (" ^ (string_of_int (stats#getStmtExec)) ^ " statements verified)");
       Java_frontend_bridge.unload();
     with
-      PreprocessorDivergence (l, msg) -> print_msg l msg; exit 1
+      PreprocessorDivergence (l, msg) -> print_msg (Lexed l) msg; exit 1
     | ParseException (l, msg) -> print_msg l ("Parse error" ^ (if msg = "" then "." else ": " ^ msg)); exit 1
     | CompilationError(msg) -> print_endline (msg); exit 1
     | StaticError (l, msg, url) -> print_msg l msg; exit 1
-    | SymbolicExecutionError (ctxts, phi, l, msg, url) ->
+    | SymbolicExecutionError (ctxts, l, msg, url) ->
         (*
         let _ = print_endline "Trace:" in
         let _ = List.iter (fun c -> print_endline (string_of_context c)) (List.rev ctxts) in
         let _ = print_endline ("Heap: " ^ string_of_heap h) in
         let _ = print_endline ("Env: " ^ string_of_env env) in
-        let _ = print_endline ("Failed query: " ^ phi) in
         *)
-        let _ = print_msg l msg in
-        exit 1
+      let _ = print_msg l msg in
+      exit 1
     in
     if emitHighlightedSourceFiles then
     begin
@@ -145,7 +226,7 @@ let _ =
   let stats = ref false in
   let verbose = ref 0 in
   let disable_overflow_check = ref false in
-  let prover: string option ref = ref None in
+  let prover: string ref = ref default_prover in
   let compileOnly = ref false in
   let isLibrary = ref false in
   let allowAssume = ref false in
@@ -156,18 +237,25 @@ let _ =
   let allModules: string list ref = ref [] in
   let dllManifestName = ref None in
   let emitHighlightedSourceFiles = ref false in
+  let dumpPerLineStmtExecCounts = ref false in
   let exports: string list ref = ref [] in
   let outputSExpressions : string option ref = ref None in
   let runtime: string option ref = ref None in
   let provides = ref [] in
+  let breakpoint_lino : int option ref = ref None in
+  let context_export_file : string option ref = ref None in
+  let export_lino : int option ref = ref None in
   let keepProvideFiles = ref false in
   let include_paths: string list ref = ref [] in
+  let define_macros: string list ref = ref [] in
   let library_paths: string list ref = ref ["CRT"] in
   let safe_mode = ref false in
   let header_whitelist: string list ref = ref [] in
   let linkShouldFail = ref false in
   let useJavaFrontend = ref false in
   let enforceAnnotations = ref false in
+  let allowUndeclaredStructTypes = ref false in
+  let dataModel = ref data_model_32bit in
   let vroots = ref [Util.crt_vroot Util.default_bindir] in
   let add_vroot vroot =
     let (root, expansion) = Util.split_around_char vroot '=' in
@@ -189,7 +277,7 @@ let _ =
   let cla = [ "-stats", Set stats, " "
             ; "-verbose", Set_int verbose, "-1 = file processing; 1 = statement executions; 2 = produce/consume steps; 4 = prover queries."
             ; "-disable_overflow_check", Set disable_overflow_check, " "
-            ; "-prover", String (fun str -> prover := Some str), "Set SMT prover (e.g. redux, z3)."
+            ; "-prover", String (fun str -> prover := str), "Set SMT prover (" ^ list_provers() ^ ")."
             ; "-c", Set compileOnly, "Compile only, do not perform link checking."
             ; "-shared", Set isLibrary, "The file is a library (i.e. no main function required)."
             ; "-allow_assume", Set allowAssume, "Allow assume(expr) annotations."
@@ -201,8 +289,12 @@ let _ =
             ; "-bindir", String (fun str -> let p = Util.abs_path str in Util.set_bindir p; add_vroot ("CRT=" ^ p)), "Set custom bindir with standard library"
             ; "-vroot", String (fun str -> add_vroot str), "Add a virtual root for include paths and, creating or linking vfmanifest files (e.g. MYLIB=../../lib). Ill-formed roots are ignored."
             ; "-emit_highlighted_source_files", Set emitHighlightedSourceFiles, " "
+            ; "-dump_per_line_stmt_exec_counts", Set dumpPerLineStmtExecCounts, " "
             ; "-provides", String (fun path -> provides := !provides @ [path]), " "
             ; "-keep_provide_files", Set keepProvideFiles, " "
+            ; "-breakpoint", Int (fun brp -> breakpoint_lino := Some brp), "Set the breakpoint line."
+            ; "-context_export_file", String (fun f -> context_export_file := Some f), "File to store the logical context of the exportpoint."
+            ; "-exportpoint", Int (fun ctp -> export_lino := Some ctp), "Set the line number for context dumps"
             ; "-emit_sexpr",
               String begin fun str ->
                 outputSExpressions := Some str;
@@ -217,12 +309,15 @@ let _ =
               "Emits the AST as an s-expression to the specified file; raises exception on unsupported constructs."
             ; "-export", String (fun str -> exports := str :: !exports), " "
             ; "-I", String (fun str -> include_paths := str :: !include_paths), "Add a directory to the list of directories to be searched for header files."
+            ; "-D", String (fun str -> define_macros := str :: !define_macros), "Predefine name as a macro, with definition 1."
             ; "-L", String (fun str -> library_paths := str :: !library_paths), "Add a directory to the list of directories to be searched for manifest files during linking."
             ; "-safe_mode", Set safe_mode, "Safe mode (for use in CGI scripts)."
             ; "-allow_header", String (fun str -> header_whitelist := str::!header_whitelist), "Add the specified header to the whitelist."
             ; "-link_should_fail", Set linkShouldFail, "Specify that the linking phase is expected to fail."
             ; "-javac", Unit (fun _ -> (useJavaFrontend := true; Java_frontend_bridge.load ())), " "
             ; "-enforce_annotations", Unit (fun _ -> (enforceAnnotations := true)), " "
+            ; "-allow_undeclared_struct_types", Unit (fun () -> (allowUndeclaredStructTypes := true)), " "
+            ; "-target", String (fun s -> dataModel := data_model_of_string s), "Target platform of the program being verified. Determines the size of pointer and integer types. Supported targets: " ^ String.concat ", " (List.map fst data_models)
             ]
   in
   let process_file filename =
@@ -241,10 +336,13 @@ let _ =
           option_provides = !provides;
           option_keep_provide_files = !keepProvideFiles;
           option_include_paths = List.map (Util.replace_vroot !vroots) !include_paths;
+          option_define_macros = !define_macros;
           option_safe_mode = !safe_mode;
           option_header_whitelist = !header_whitelist;
           option_use_java_frontend = !useJavaFrontend;
-          option_enforce_annotations = !enforceAnnotations
+          option_enforce_annotations = !enforceAnnotations;
+          option_allow_undeclared_struct_types = !allowUndeclaredStructTypes;
+          option_data_model = !dataModel
         } in
         print_endline filename;
         let emitter_callback (packages : package list) =
@@ -254,7 +352,8 @@ let _ =
               SExpressionEmitter.emit target_file packages          
             | None             -> ()
         in
-        verify ~emitter_callback:emitter_callback !stats options !prover filename !emitHighlightedSourceFiles;
+        verify ~emitter_callback:emitter_callback !stats options !prover
+          filename !breakpoint_lino !context_export_file !export_lino !emitHighlightedSourceFiles !dumpPerLineStmtExecCounts;
         allModules := ((Filename.chop_extension filename) ^ ".vfmanifest")::!allModules
       end
     else if Filename.check_suffix filename ".o" then
@@ -277,7 +376,8 @@ let _ =
       end
   in
   let usage_string =
-    Verifast.banner () ^ "\nUsage: verifast [options] {sourcefile|objectfile}\n"
+    Verifast.banner ()
+    ^ "\nUsage: verifast [options] {sourcefile|objectfile}\n"
   in
   if Array.length Sys.argv = 1
   then usage cla usage_string

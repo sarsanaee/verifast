@@ -2292,7 +2292,6 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
               | Some(ehn) -> 
                 if not (List.mem_assoc ehn hpm) then static_error l "Extended handle must appear earlier in same box class." None;
                 let (el, epmap, extendedInv, einv, epbcs) = List.assoc ehn hpm in
-                (match einv with ExprAsn(_, _) -> () | _ -> static_error l "Extended handle's invariant must be pure assertion." None); 
                 if (List.length pmap) < (List.length epmap) then static_error l "Extended handle's parameter list must be prefix of extending handle's parameter list." None;
                 if not
                 (List.for_all2
@@ -3979,6 +3978,9 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let _, ushort_pred_symb, _, ushorts_pred_symb, _, malloc_block_ushorts_pred_symb as ushort_pointee_tuple = pointee_tuple "u_short_integer" "ushorts"
   let _, char_pred_symb, _, chars_pred_symb, _, malloc_block_chars_pred_symb as char_pointee_tuple = pointee_tuple "character" "chars"
   let _, uchar_pred_symb, _, uchars_pred_symb, _, malloc_block_uchars_pred_symb as uchar_pointee_tuple = pointee_tuple "u_character" "uchars"
+  let _, float__pred_symb, _, floats_pred_symb, _, malloc_block_floats_pred_symb as float_pointee_tuple = pointee_tuple "float_" "floats"
+  let _, double__pred_symb, _, doubles_pred_symb, _, malloc_block_doubles_pred_symb as double_pointee_tuple = pointee_tuple "double_" "doubles"
+  let _, long_double_pred_symb, _, long_doubles_pred_symb, _, malloc_block_long_doubles_pred_symb as long_double_pointee_tuple = pointee_tuple "long_double" "long_doubles"
   
   let deref_pointee_tuple (cn, csym, an, asym, mban, mbasym) = (cn, csym(), an, asym(), mban, mbasym())
   
@@ -3999,6 +4001,9 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
     | Int (Unsigned, 1) -> Some ushort_pointee_tuple
     | Int (Signed, 0) -> Some char_pointee_tuple
     | Int (Unsigned, 0) -> Some uchar_pointee_tuple
+    | Float -> Some float_pointee_tuple
+    | Double -> Some double_pointee_tuple
+    | LongDouble -> Some long_double_pointee_tuple
     | _ -> None
     end
   
@@ -4316,6 +4321,13 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           )
           hpmap
         in
+        hpmap |> List.iter begin fun (hpn, (l, pmap, einv, inv, pncs)) ->
+          match einv with 
+            None -> ()
+          | Some ehn -> 
+            let (el, epmap, extendedInv, einv, epbcs) = List.assoc ehn hpmap in
+            match einv with ExprAsn (_, _) -> () | _ -> static_error l "Extended handle's invariant must be pure assertion." None
+        end; 
         (bcn, (l, boxpmap, winv, boxvarmap, amap, hpmap))
       end
       boxmap

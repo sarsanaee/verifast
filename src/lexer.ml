@@ -921,6 +921,7 @@ and
   parse_expr_primary = parser
   [< '(l, Ident _) >] -> IntLit (l, zero_big_int, false, false, NoLSuffix)
 | [< '(l, Int (n, dec, usuffix, lsuffix)) >] -> IntLit (l, n, dec, usuffix, lsuffix)
+| [< '(l, Kwd "-"); '(l, Int (n, dec, usuffix, lsuffix)) >] -> IntLit (l, minus_big_int n, dec, usuffix, lsuffix)
 | [< '(l, Kwd "("); e0 = parse_operators; '(_, Kwd ")"); e = parse_operators_rest e0 >] -> e
 | [< '(l, Kwd "!"); e = parse_expr_suffix >] -> Operation(l, Not, [e])
 | [< '(l, Kwd "INT_MIN") >] -> IntLit (l, min_signed_big_int int_rank, true, false, NoLSuffix)
@@ -934,6 +935,9 @@ and
 | [< '(l, Kwd "LLONG_MIN") >] -> IntLit (l, big_int_of_string "-9223372036854775808", true, false, NoLSuffix)
 | [< '(l, Kwd "LLONG_MAX") >] -> IntLit (l, big_int_of_string "9223372036854775807", true, false, NoLSuffix)
 | [< '(l, Kwd "ULLONG_MAX") >] -> IntLit (l, big_int_of_string "18446744073709551615", true, true, NoLSuffix)
+| [< '(l, Kwd "LONG_MIN") >] -> IntLit (l, min_signed_big_int long_rank, true, false, NoLSuffix)
+| [< '(l, Kwd "LONG_MAX") >] -> IntLit (l, max_signed_big_int long_rank, true, false, NoLSuffix)
+| [< '(l, Kwd "ULONG_MAX") >] -> IntLit (l, max_unsigned_big_int long_rank, true, true, NoLSuffix)
 and
   parse_expr_mul_rest e0 = parser
   [< '(l, Kwd "*"); e1 = parse_expr_suffix; e = parse_expr_mul_rest (Operation (l, Mul, [e0; e1])) >] -> e

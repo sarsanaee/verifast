@@ -10,8 +10,7 @@ pthread_spinlock_t g_lock;
 
 /*@
 
-predicate g_pred()
- requires
+predicate g_pred() =
  integer(&g, ?vf_g)
  &*& vf_g >= 0 &*& vf_g <= 1024;
 
@@ -21,7 +20,7 @@ predicate g_pred()
 
 predicate threadfn_info (int *g_l) = true;
 
-inductive quad<a, b, c, d> = quad(int a, int *b, int c, int d);
+inductive quad = quad(int a, int *b, int c, int d);
 
 predicate_family_instance pthread_run_pre(threadfn)
  (void *data, any info) =

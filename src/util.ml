@@ -227,11 +227,11 @@ let rec try_assoc x xys =
   | _::xys -> try_assoc x xys
 
 let rec try_assoc_case_insensitive x xys =
-  let x = String.uppercase_ascii x in
+  let x = BatString.uppercase_ascii x in
   let rec iter xys =
     match xys with
       [] -> None
-    | (x', y)::xys when String.uppercase_ascii x' = x -> Some y
+    | (x', y)::xys when BatString.uppercase_ascii x' = x -> Some y
     | _::xys -> iter xys
   in
   iter xys
